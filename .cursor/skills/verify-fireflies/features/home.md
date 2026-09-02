@@ -6,7 +6,7 @@ Home is `/`. After Clerk sign-in it greets the session first name (`Verify` on a
 
 - `home-load` renders the greeting, workspace name, and three insight cards after meetings fetch (`Meetings`, `In progress`, `Tasks`). Busy meetings raise the In progress count. There is no fourth card titled with a meeting `sourceId`.
 - `home-empty` shows capture-or-upload copy when no rows match. `Last meetings` and `view more` stay on the page.
-- `home-preview` shows at most two meetings in a two-column grid on desktop and one column on mobile.
+- `home-preview` shows at most two meetings in a two-column grid on desktop and one column on mobile. Queued and processing rows show a summary skeleton (`aria-label` `Loading summary`), not empty summary copy.
 - `home-more` opens `/meetings` from `view more` beside `Last meetings`.
 
 ## How to get to it (user POV)
