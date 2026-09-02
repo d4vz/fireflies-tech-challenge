@@ -110,7 +110,8 @@ Proof standards:
 - Click and type in the UI. Do not seed Mongo or call Hono `:13000` as a stand-in for a user action.
 - Upload is the exception in `features/capture.md`: if the OS file chooser blocks the hidden input, POST the file to `<ui_url>/api/meetings/upload?filename=...` (the same Next route `Capture` uses), then prove the list in the browser.
 - Capture the click and the new state, not only the last frame.
-- A dry-run name is not proof. After upload, the meetings list or detail must show the new `sourceId`.
+- `sample-audio` / `sample-video` are 2s sine tones. They prove ingest. Speaker labels need spoken audio on meeting detail.
+- A dry-run name is not proof. After upload, the meetings list or detail must show the new `name`.
 
 ## Cleanup
 

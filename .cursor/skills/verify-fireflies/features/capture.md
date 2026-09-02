@@ -8,7 +8,7 @@ Capture adds a meeting by recording the screen or uploading a video or audio fil
 - `capture-upload` opens the chevron menu, chooses `Upload`, and sends a file from the name dialog dropzone.
 - `capture-busy` shows `uploading` in the header and disables Capture while the POST is in flight.
 - `capture-error` shows the error string next to Capture when the upload fails.
-- `capture-list` shows a row whose `sourceId` is the filename after ingest (open `/meetings` or the toast link).
+- `capture-list` shows a row whose `name` is the filename stem after ingest (open `/meetings` or the toast link).
 
 ## How to get to it (user POV)
 
@@ -31,7 +31,7 @@ Preconditions:
 - **Choose file.** If `browser_fill` can set the dropzone file input to a sample path, do that, type a name, then confirm `Upload`.
 - **Fallback when the file chooser is native.** POST the sample bytes to `<ui_url>/api/meetings/upload?filename=verify-sample.mp4` with `Content-Type: video/mp4` and `Authorization: Bearer` from `.run/session.jwt`. A `Cookie: __session=` POST to Next redirects to Clerk sign-in. Expect 201 JSON with `_id`, `sourceId`, and `blob.kind` `video`. POST `<ui_url>/api/meetings/upload?filename=verify-sample.mp3` with `Content-Type: audio/mpeg` and the same Bearer header. Expect 201 and `blob.kind` `audio`. These are the same Next route the dialog uses. Then `browser_navigate` to `<ui_url>/meetings`.
 - **Header while uploading.** The header shows `uploading` and Capture is `aria-busy=true` during a UI POST. After success a toast shows processing copy and a `View meeting` link. The current route stays put.
-- **List result.** `/meetings` is no longer the empty copy. A video row heading matches `verify-sample.mp4`. An audio row heading matches `verify-sample.mp3` and the link name starts with `Audio recording`. Status starts as `Queued` or `Processing` (tiny samples may already be `Ready`).
+- **List result.** `/meetings` is no longer the empty copy. A video row heading matches `verify-sample`. An audio row heading matches `verify-sample` and the link name starts with `Audio recording`. Status starts as `Queued` or `Processing` (tiny samples may already be `Ready`). A 2s sine sample can be `Ready` with an empty transcript; that is ingest proof, not speaker-rail proof.
 - **Second read.** Reload `/meetings` or `GET <ui_url>/api/meetings?page=1&limit=5`. Both `_id`s are still present. Save JSON as `artifacts/capture/meetings.json`.
 - **Screen record path.** Choose `Capture`. A dialog titled `Meeting name` opens. Type a name, then choose `Start capture`. The header button becomes `Stop` and the header shows `recording` if `getDisplayMedia` is allowed. If the browser permission prompt appears, stop and record `capture-record` as blocked with that prompt, not as failed product behavior.
 - **Proof.** `artifacts/capture/dialog.png` shows the dropzone and audio extensions. `artifacts/capture/list` proof shows both rows on `/meetings`. Include both upload status codes in `notes.md`.

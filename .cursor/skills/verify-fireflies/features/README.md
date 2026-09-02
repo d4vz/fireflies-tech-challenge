@@ -42,8 +42,9 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Home](./home.md) covers greeting, insight cards, status tabs, empty state, and `sourceId` / summary search.
+- [Home](./home.md) covers greeting, insight cards, empty state, and Last meetings.
 - [Meetings list](./meetings-list.md) covers the library, empty copy, pagination, and opening a row.
-- [Meeting detail](./meeting-detail.md) covers video or audio playback, summary, takeaways, action items, and transcript.
+- [Meeting detail](./meeting-detail.md) covers video or audio playback, summary, tasks, and speaker turns.
 - [Capture](./capture.md) covers screen record, video or audio upload, and the meetings list after ingest.
 - [AskFred](./ask-fred.md) covers opening the assistant from Home, the header, and the sidebar, then sending a prompt.
+- [Tasks](./tasks.md) covers the `/tasks` library, filters, and checkbox toggle.
