@@ -26,9 +26,11 @@ I built this project AI-first. The agent workflow is [pstack](https://github.com
 
 ### Models
 
-For transcription, summaries, and embeddings I use OpenAI because one API key covers all three. Files longer than about 10 minutes can take a long time. I found that while building this. Transcription is the slow step, and that wait is an OpenAI limitation. While a meeting is queued or processing, the UI shows skeletons for the summary and tasks instead of empty copy.
+Transcription uses [AssemblyAI](https://www.assemblyai.com) with speaker labels. The name in the backend [config.yaml](https://github.com/d4vz/fireflies-tech-challenge-backend/blob/main/config.yaml) is `assemblyai`. Summaries and embeddings still use [OpenAI](https://platform.openai.com). I tried OpenAI `gpt-4o-transcribe-diarize` first so one API key would cover speech-to-text too. A 5-minute clip took 133 seconds. A 10-minute clip was still running after 15 minutes, then failed. AssemblyAI transcribed that same 10-minute file in 15 seconds, at least 60 times faster, with speaker labels on the whole file. A 5-minute file took 13 seconds.
 
-If you want something cheaper or local-first, those jobs could also run on [whisper.cpp](https://github.com/ggml-org/whisper.cpp) for speech-to-text, [Voyage](https://docs.voyageai.com/docs/embeddings) or a similar embedding model, and any other provider for summaries. That is not wired up today. The current model names live in the backend [config.yaml](https://github.com/d4vz/fireflies-tech-challenge-backend/blob/main/config.yaml).
+While a meeting is queued or processing, the UI shows skeletons for the summary and tasks instead of empty copy.
+
+If you want something cheaper or local-first, those jobs could also run on [whisper.cpp](https://github.com/ggml-org/whisper.cpp) for speech-to-text, [Voyage](https://docs.voyageai.com/docs/embeddings) or a similar embedding model, and any other provider for summaries. That is not wired up today.
 
 ## Clone
 
@@ -44,7 +46,7 @@ git submodule update --init --recursive
 
 ## Run
 
-You need [Docker](https://docs.docker.com/get-docker/) and [Bun](https://bun.sh). Bun is only for the frontend. You also need an [OpenAI](https://platform.openai.com) API key and a [Clerk](https://clerk.com) application. Use the same Clerk app in both repos.
+You need [Docker](https://docs.docker.com/get-docker/) and [Bun](https://bun.sh). Bun is only for the frontend. You also need an [OpenAI](https://platform.openai.com) API key, an [AssemblyAI](https://www.assemblyai.com) API key, and a [Clerk](https://clerk.com) application. Use the same Clerk app in both repos.
 
 ```
 curl -fsSL https://bun.sh/install | bash
@@ -57,13 +59,13 @@ cd backend
 cp .env.example .env
 ```
 
-Fill in `OPENAI_API_KEY` and `CLERK_SECRET_KEY`. Then start the whole backend:
+Fill in `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, and `CLERK_SECRET_KEY`. Then start the whole backend:
 
 ```
 docker compose up --build
 ```
 
-The API listens on `http://localhost:3000`.
+The API listens on `http://localhost:3000`. On Railway, set those same keys on the API service.
 
 ```
 cd ../frontend

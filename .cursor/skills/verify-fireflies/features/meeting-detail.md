@@ -1,13 +1,13 @@
 # Meeting detail
 
-Meeting detail is `/meetings/:id`. It plays the stored media, shows processing status, summary / takeaways / action items, and a transcript rail.
+Meeting detail is `/meetings/:id`. It plays the stored media, shows processing status, summary, tasks, and a transcript rail of speaker turns.
 
 ## Sub-features
 
-- `detail-open` shows `sourceId` as the page `h1` and a status chip.
+- `detail-open` shows `meeting.name` as the page `h1` and a status chip.
 - `detail-media` renders stored media. Video uses `<video>` with a thumbnail poster. Audio uses a Mic plus native `<audio controls>`. Both fetch `/api/meetings/<id>/video`.
 - `detail-summary` shows Summary. Queued and processing show a summary skeleton (`aria-label` `Loading summary`), not `(no summary)`. Tasks show a skeleton while queued or processing, a checklist when tasks exist, and nothing when the meeting is ready or failed with no tasks.
-- `detail-transcript` shows transcript text when status is `ready`, `(empty transcript)` when there are no chunks, and a pending skeleton while status is queued or processing.
+- `detail-transcript` shows speaker turns when status is `ready` and turns exist, `(empty transcript)` when there are no turns, and a pending skeleton while status is queued or processing.
 - `detail-missing` shows `meeting not found` for an unknown id.
 
 ## How to get to it (user POV)
@@ -23,12 +23,13 @@ Preconditions:
 - Viewport is 1440x900 so the transcript rail is docked (`lg+`). Below `lg`, open it with the `Transcript` button.
 - A meeting id from `GET <ui_url>/api/meetings?page=1&limit=5` when proving a real record. Use `missing` (or any non-existent id) for the not-found path.
 
-- **Open from list.** From `/meetings`, choose the row named the meeting `sourceId`. Run `browser_click` that link. The article `h1` is that `sourceId`. Status is one of `Queued`, `Processing`, `Ready`, `Failed`.
+- **Open from list.** From `/meetings`, choose the row named the meeting `name`. Run `browser_click` that link. The article `h1` is that `name`. Status is one of `Queued`, `Processing`, `Ready`, `Failed`.
 - **Media.** For `blob.kind` video the page includes a `video` whose `src` is `/api/meetings/<id>/video` and `poster` is `/api/meetings/<id>/thumbnail`. For `blob.kind` audio the page includes `audio` with `controls` and the same `/video` src. There is no `<video>` and no poster. Prove both kinds when both exist in the library.
-- **Summary block.** Headings `Summary`, `Takeaways`, and `Action items` are visible. Empty summary text is `(no summary)`.
-- **Transcript dock.** On the right, heading `Transcript` (screen-reader text ` for <sourceId>`). Ready with chunks shows the joined chunk text. Ready/failed with no chunks shows `(empty transcript)`. Queued/processing shows the transcript skeleton until status is `Ready` (the dock does not fetch chunks while busy).
+- **Summary block.** Heading `Summary` is visible. Queued/processing shows a summary skeleton (`aria-label` `Loading summary`), not `(no summary)`. Ready/failed with no text shows `(no summary)`. Queued/processing shows a tasks skeleton (`aria-label` `Loading tasks`). Ready/failed with tasks shows the Tasks card. Ready/failed with no tasks shows no Tasks card and no `No action items` copy. There is no `Takeaways` heading and no `Action items` heading.
+- **Transcript dock.** On the right, heading `Transcript` (screen-reader text ` for <name>`). Ready with turns shows a rounded-square letter avatar, `Speaker 1` / `Speaker 2` (letter ids `A` / `B` from the API), an accent `m:ss` start time, and utterance text. Consecutive turns stay separate rows; do not expect joined blob text. Ready/failed with no turns shows `(empty transcript)`. Queued/processing shows the transcript skeleton until status is `Ready` (the dock does not fetch turns while busy).
+- **Speaker-rail proof.** `control-fireflies sample-audio` / `sample-video` are 2s sine tones. Those meetings go `Ready` with `(empty transcript)`. To prove a speaker label, upload spoken audio (for example a `say`-generated mp3) through Capture or the Next upload fallback, wait until `Ready`, then confirm the rail shows `Speaker 1`. A short clip may be only `Speaker 1`.
 - **Unknown id.** Open `/meetings/missing`. Run `browser_navigate` to `{ui_url}/meetings/missing`. Main copy is `meeting not found`.
-- **Proof.** Save `artifacts/meeting-detail/detail.aria.txt` and `detail.png` with `sourceId`, status, and the Summary heading. Save `GET <ui_url>/api/meetings/<id>` as `meeting.json`. For a ready meeting also save `GET <ui_url>/api/meetings/<id>/transcripts` as `transcripts.json`.
+- **Proof.** Save `artifacts/meeting-detail/detail.aria.txt` and `detail.png` with `name`, status, Summary, and at least one speaker label when the meeting has turns. Save `GET <ui_url>/api/meetings/<id>` as `meeting.json`. For a ready meeting also save `GET <ui_url>/api/meetings/<id>/transcripts` as `transcripts.json`. Each item is `{ index, speaker, start, end, text }` with utterance `text` (not `Speaker: …` prefixes).
 
 ## Gotchas
 
@@ -36,3 +37,4 @@ Preconditions:
 - Failed meetings can still show the media player and `(empty transcript)`.
 - The visible media URL is the Next `/video` proxy, not MinIO. A 404 poster on a video meeting is a broken blob, not a missing meeting. Audio never requests `/thumbnail`.
 - `When` timestamps format in the browser locale (`en-US`, e.g. `Sep 1, 1:10 AM`). Do not assert the raw ISO string on screen.
+- `h1` is `meeting.name` (filename stem such as `verify-sample`), not `sourceId` (`verify-sample.mp4`).
