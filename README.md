@@ -55,7 +55,7 @@ The parent `docker-compose.yml` includes [backend/docker-compose.yml](backend/do
 cp .env.example .env
 ```
 
-Fill the keys. OpenAI and AssemblyAI stay on the backend. Clerk is shared:
+Fill the keys in `.env`.
 
 ```
 # backend only
