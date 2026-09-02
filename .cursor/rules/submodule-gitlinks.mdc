@@ -1,0 +1,10 @@
+---
+description: After pushing backend or frontend, bump and push the parent submodule gitlink.
+alwaysApply: true
+---
+
+# Parent submodule gitlinks
+
+This repo only records SHAs for `backend` and `frontend`.
+
+After you push a child `main`, `git add` that submodule here, commit `chore: bump <name> submodule`, and push parent `main`. Done when `git submodule status` matches the child's `origin/main`.
