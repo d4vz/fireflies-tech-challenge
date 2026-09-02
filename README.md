@@ -12,7 +12,7 @@ The frontend is [Next.js](https://nextjs.org), with [TanStack Query](https://tan
 
 ![Access diagram](assets/access.svg)
 
-The backend is one Bun process running [Hono](https://hono.dev). MongoDB is the primary database. Meetings can arrive from different sources and the shape is not fixed, so a document store fits, and [MongoDB Vector Search](https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-overview/) lets us search across embeddings. Blobs go to [MinIO](https://min.io), an S3-compatible store we run ourselves. Redis backs [BullMQ.](https://docs.bullmq.io) This README is the parent overview. More documentation will live in each child repo.
+The backend is one Bun process running [Hono](https://hono.dev). MongoDB is the primary database. Meetings can arrive from different sources and the shape is not fixed, so a document store fits, and [MongoDB Vector Search](https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-overview/) lets us search across embeddings. Blobs go to [MinIO](https://min.io), an S3-compatible store we run ourselves. Redis backs [BullMQ.](https://docs.bullmq.io) This README is the parent overview. How to run both apps is below. Child repos have the env templates.
 
 ## LLM usage
 
@@ -27,4 +27,62 @@ For transcription, summaries, and embeddings I use OpenAI because one API key co
 ```
 git clone --recurse-submodules https://github.com/d4vz/fireflies-tech-challenge.git
 ```
+
+If you already cloned without submodules:
+
+```
+git submodule update --init --recursive
+```
+
+## Run
+
+You need [Bun](https://bun.sh), [Docker](https://docs.docker.com/get-docker/), and [ffmpeg](https://ffmpeg.org) on your PATH. You also need an [OpenAI](https://platform.openai.com) API key and a [Clerk](https://clerk.com) application. Use the same Clerk app in both repos.
+
+```
+curl -fsSL https://bun.sh/install | bash
+```
+
+On macOS:
+
+```
+brew install ffmpeg
+```
+
+On Debian or Ubuntu:
+
+```
+sudo apt install ffmpeg
+```
+
+MongoDB, Redis, and MinIO come from the backend compose file. I used the Atlas local image so `$vectorSearch` works on your machine.
+
+```
+cd backend
+docker compose up -d
+cp .env.example .env
+```
+
+Fill in `OPENAI_API_KEY` and `CLERK_SECRET_KEY`. The rest of `.env.example` already points at compose.
+
+```
+bun install
+bun run dev
+```
+
+The API listens on `http://localhost:3000`.
+
+```
+cd ../frontend
+cp .env.example .env.local
+```
+
+Put the Clerk publishable key and secret key there. `API_URL` already points at the local Hono server. Next.js talks to the backend. The browser does not. Build and start the production server. Do not use `next dev`.
+
+```
+bun install
+bun run build
+bun run start
+```
+
+Open `http://localhost:8080`. Clerk's development handshake hangs on `127.0.0.1`, so stay on `localhost`.
 
