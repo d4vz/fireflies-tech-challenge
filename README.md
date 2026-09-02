@@ -1,10 +1,16 @@
 # Fireflies Clone
 
+First of all, thank you so much for the opportunity to do this challenge. It was a lot of fun 😄
+
+I learned much more about embbedings, about a pipeline that converts video and extracts audio, about streaming microphone audio and doing screen sharing from the browser mixing multiple stream channels.
+
+I put a lot of effort into this. I hope you appreciate it.
+
+## Overview
+
 This is the parent repository. Backend and frontend live in their own Git repos and are pulled in as [Git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules). This repo only pins the SHAs for [backend](https://github.com/d4vz/fireflies-tech-challenge-backend) and [frontend](https://github.com/d4vz/fireflies-tech-challenge-frontend).
 
 **Why Git Modules?** I split the apps into two repositories instead of a monorepo. Separate repos are easier to work with, and they map better to Railway, where I deployed each app as its own service.
-
-## Overview
 
 ![Railway deployment](assets/railway.png)
 
@@ -20,7 +26,9 @@ I built this project AI-first. The agent workflow is [pstack](https://github.com
 
 ### Models
 
-For transcription, summaries, and embeddings I use OpenAI because one API key covers all three. If you want something cheaper or local-first, those jobs could also run on [whisper.cpp](https://github.com/ggml-org/whisper.cpp) for speech-to-text, [Voyage](https://docs.voyageai.com/docs/embeddings) or a similar embedding model, and any other provider for summaries. That is not wired up today. The current model names live in the backend [config.yaml](https://github.com/d4vz/fireflies-tech-challenge-backend/blob/main/config.yaml).
+For transcription, summaries, and embeddings I use OpenAI because one API key covers all three. Files longer than about 10 minutes can take a long time. I found that while building this. Transcription is the slow step, and that wait is an OpenAI limitation. While a meeting is queued or processing, the UI shows skeletons for the summary and tasks instead of empty copy.
+
+If you want something cheaper or local-first, those jobs could also run on [whisper.cpp](https://github.com/ggml-org/whisper.cpp) for speech-to-text, [Voyage](https://docs.voyageai.com/docs/embeddings) or a similar embedding model, and any other provider for summaries. That is not wired up today. The current model names live in the backend [config.yaml](https://github.com/d4vz/fireflies-tech-challenge-backend/blob/main/config.yaml).
 
 ## Clone
 
@@ -73,4 +81,10 @@ bun run start
 Open `http://localhost:8080`. Clerk's development handshake hangs on `127.0.0.1`, so stay on `localhost`.
 
 To run Hono on the host instead of in compose, start only the data stores (`docker compose up -d mongodb redis minio`), install [ffmpeg](https://ffmpeg.org), then `bun install` and `bun run dev` in `backend/`.
+
+## Next steps
+
+- A meeting bot that joins a live call and records it, either with [Playwright](https://playwright.dev) or an API such as [Recall.ai](https://www.recall.ai).
+- [Google Calendar](https://developers.google.com/calendar) so upcoming meetings can be scheduled and captured from the calendar.
+- Semantic search across all of a user's meetings, including summaries, not only meeting-scoped transcript search.
 
