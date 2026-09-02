@@ -5,7 +5,7 @@ Meetings list is `/meetings`. It shows the library five rows per page, paginates
 ## Sub-features
 
 - `list-empty` shows capture-or-upload copy and CTAs when `total` is 0.
-- `list-rows` shows a preview tile, `sourceId`, status chip, optional summary, and timestamp. Video uses the thumbnail. Audio uses a Mic with sr-only `Audio recording`.
+- `list-rows` shows a preview tile, `sourceId`, status chip, optional summary, and timestamp. Queued and processing rows show a summary skeleton (`aria-label` `Loading summary`). Video uses the thumbnail. Audio uses a Mic with sr-only `Audio recording`.
 - `list-open` navigates to `/meetings/:id` from a row.
 - `list-page` moves between pages when `total` is greater than 5.
 
