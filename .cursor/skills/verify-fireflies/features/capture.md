@@ -14,6 +14,7 @@ Capture adds a meeting by recording the screen or uploading a video or audio fil
 
 - Choose `Capture` in the header (screen recording).
 - Choose the `Upload` chevron, then menu `Upload`, then drop or browse a file.
+- On an empty Home or Meetings library, choose `Capture a meeting` or `Upload a recording`.
 
 ## Driving it with the Cursor browser
 
