@@ -1,0 +1,612 @@
+#!/usr/bin/env python3
+"""Launch, doctor, and tear down an isolated Fireflies verification stack."""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+REQUIRED_SECRETS = (
+    "OPENAI_API_KEY",
+    "MONGODB_URI",
+    "S3_ENDPOINT",
+    "S3_ACCESS_KEY",
+    "S3_SECRET_KEY",
+    "S3_BUCKET",
+    "REDIS_URL",
+)
+
+# Local compose values from backend/docker-compose.yml. Used only when the
+# secrets file has OPENAI_API_KEY but omits the Docker-backed keys.
+COMPOSE_SECRET_DEFAULTS = {
+    "MONGODB_URI": (
+        "mongodb://fireflies:fireflies@127.0.0.1:27017/fireflies"
+        "?authSource=admin&directConnection=true"
+    ),
+    "REDIS_URL": "redis://127.0.0.1:6379",
+    "S3_ENDPOINT": "http://127.0.0.1:9000",
+    "S3_ACCESS_KEY": "minioadmin",
+    "S3_SECRET_KEY": "minioadmin",
+    "S3_BUCKET": "fireflies",
+}
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_DIR = SCRIPT_DIR.parent
+REPO_ROOT = SKILL_DIR.parent.parent.parent
+RUN_DIR = SKILL_DIR / ".run"
+INSTANCE_PATH = RUN_DIR / "instance.json"
+ARTIFACTS_DIR = SKILL_DIR / "artifacts"
+BACKEND_DIR = REPO_ROOT / "backend"
+FRONTEND_DIR = REPO_ROOT / "frontend"
+COMPOSE_FILE = BACKEND_DIR / "docker-compose.yml"
+
+DEFAULT_UI_PORT = 18080
+DEFAULT_API_PORT = 13000
+VERIFY_MONGO_DB = "fireflies_verify"
+VERIFY_S3_BUCKET = "fireflies-verify"
+VERIFY_REDIS_DB = "15"
+
+
+def die(message: str, code: int = 1) -> None:
+    print(f"control-fireflies: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def say(message: str) -> None:
+    print(f"control-fireflies: {message}")
+
+
+def load_dotenv(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if line == "" or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export ") :].strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        env[key] = value
+    return env
+
+
+def secrets_path() -> Path:
+    override = os.environ.get("FIREFLIES_VERIFY_ENV")
+    if override:
+        return Path(override)
+    env_file = BACKEND_DIR / ".env"
+    if env_file.is_file():
+        return env_file
+    return BACKEND_DIR / ".env.local"
+
+
+def load_secrets() -> dict[str, str]:
+    path = secrets_path()
+    if not path.is_file():
+        die(
+            f"missing secrets file {path}. Put backend/.env or backend/.env.local "
+            "in place, or set FIREFLIES_VERIFY_ENV to a file with OPENAI_API_KEY, "
+            "MONGODB_URI, REDIS_URL, and the S3_* keys. Do not print those values."
+        )
+    merged = dict(os.environ)
+    merged.update(load_dotenv(path))
+    for key, value in COMPOSE_SECRET_DEFAULTS.items():
+        if merged.get(key, "").strip() == "":
+            merged[key] = value
+    missing = [key for key in REQUIRED_SECRETS if merged.get(key, "").strip() == ""]
+    if missing:
+        die(f"secrets file {path} is missing {', '.join(missing)}")
+    return merged
+
+
+def rewrite_mongo_uri(uri: str) -> str:
+    parsed = urllib.parse.urlparse(uri)
+    return urllib.parse.urlunparse(parsed._replace(path=f"/{VERIFY_MONGO_DB}"))
+
+
+def rewrite_redis_uri(uri: str) -> str:
+    parsed = urllib.parse.urlparse(uri)
+    return urllib.parse.urlunparse(parsed._replace(path=f"/{VERIFY_REDIS_DB}"))
+
+
+def port_from_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        die(f"{name} must be an integer")
+    if value < 1 or value > 65535:
+        die(f"{name} is out of range")
+    return value
+
+
+def listener_pids(port: int) -> list[int]:
+    try:
+        out = subprocess.check_output(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        return []
+    pids: list[int] = []
+    for line in out.split():
+        try:
+            pids.append(int(line))
+        except ValueError:
+            continue
+    return sorted(set(pids))
+
+
+def port_is_free(port: int) -> bool:
+    return listener_pids(port) == []
+
+
+def wait_port_free(port: int, timeout: float = 8) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if port_is_free(port):
+            return
+        time.sleep(0.2)
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def ppid_of(pid: int) -> int | None:
+    try:
+        out = subprocess.check_output(["ps", "-o", "ppid=", "-p", str(pid)], text=True)
+    except subprocess.CalledProcessError:
+        return None
+    try:
+        return int(out.strip())
+    except ValueError:
+        return None
+
+
+def group_owns_port(leader_pid: int, port: int) -> bool:
+    for pid in listener_pids(port):
+        try:
+            if pid == leader_pid or os.getpgid(pid) == leader_pid:
+                return True
+        except OSError:
+            pass
+        current = pid
+        for _ in range(8):
+            if current == leader_pid:
+                return True
+            parent = ppid_of(current)
+            if parent is None or parent <= 1:
+                break
+            current = parent
+    return False
+
+
+def read_instance() -> dict[str, Any]:
+    if not INSTANCE_PATH.is_file():
+        die("no instance file. Run launch first.", 2)
+    return json.loads(INSTANCE_PATH.read_text())
+
+
+def write_instance(data: dict[str, Any]) -> None:
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    INSTANCE_PATH.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def http_get(url: str, timeout: float = 5) -> tuple[int, str]:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            return response.status, body
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        return error.code, body
+    except Exception as error:
+        return 0, str(error)
+
+
+def wait_http(url: str, timeout: float, ok: tuple[int, ...] = (200,)) -> tuple[int, str]:
+    deadline = time.time() + timeout
+    last_status = 0
+    last_body = ""
+    while time.time() < deadline:
+        last_status, last_body = http_get(url, timeout=3)
+        if last_status in ok:
+            return last_status, last_body
+        time.sleep(0.5)
+    die(f"timed out waiting for {url} (last status {last_status})")
+    return last_status, last_body
+
+
+def compose_running() -> bool:
+    try:
+        out = subprocess.check_output(
+            ["docker", "compose", "-f", str(COMPOSE_FILE), "ps", "--status", "running", "--services"],
+            cwd=BACKEND_DIR,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    services = {line.strip() for line in out.splitlines() if line.strip()}
+    return {"mongodb", "redis", "minio"}.issubset(services)
+
+
+def ensure_compose() -> bool:
+    if compose_running():
+        return False
+    say("starting docker compose (mongodb, redis, minio)")
+    subprocess.check_call(
+        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d"],
+        cwd=BACKEND_DIR,
+    )
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        if compose_running():
+            return True
+        time.sleep(1)
+    die("docker compose did not become ready")
+    return True
+
+
+def stop_compose() -> None:
+    subprocess.check_call(
+        ["docker", "compose", "-f", str(COMPOSE_FILE), "stop"],
+        cwd=BACKEND_DIR,
+    )
+
+
+def start_logged(command: list[str], cwd: Path, env: dict[str, str], log_path: Path) -> int:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = log_path.open("w")
+    proc = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    handle.close()
+    return proc.pid
+
+
+def kill_pid(pid: int) -> None:
+    if pid <= 0 or not pid_alive(pid):
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return
+        time.sleep(0.2)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def drop_scratch(env: dict[str, str]) -> None:
+    mongo_uri = rewrite_mongo_uri(env["MONGODB_URI"])
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(COMPOSE_FILE),
+                "exec",
+                "-T",
+                "mongodb",
+                "mongosh",
+                "--quiet",
+                mongo_uri.replace("localhost", "127.0.0.1").replace("127.0.0.1", "mongodb"),
+                "--eval",
+                "db.dropDatabase()",
+            ],
+            cwd=BACKEND_DIR,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(COMPOSE_FILE),
+                "exec",
+                "-T",
+                "redis",
+                "redis-cli",
+                "-n",
+                VERIFY_REDIS_DB,
+                "FLUSHDB",
+            ],
+            cwd=BACKEND_DIR,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+
+def bun_bin() -> str:
+    found = subprocess.check_output(["which", "bun"], text=True).strip()
+    if found == "":
+        die("bun is not on PATH")
+    return found
+
+
+def cmd_launch() -> None:
+    if not (FRONTEND_DIR / "package.json").is_file() or not (BACKEND_DIR / "package.json").is_file():
+        die(f"repo root looks wrong: {REPO_ROOT}")
+    if INSTANCE_PATH.is_file():
+        existing = json.loads(INSTANCE_PATH.read_text())
+        ui_pid = int(existing.get("ui_pid", 0))
+        api_pid = int(existing.get("api_pid", 0))
+        if pid_alive(ui_pid) or pid_alive(api_pid):
+            die("a verification instance is already running. Run cleanup first.")
+        INSTANCE_PATH.unlink()
+
+    ui_port = port_from_env("FIREFLIES_UI_PORT", DEFAULT_UI_PORT)
+    api_port = port_from_env("FIREFLIES_API_PORT", DEFAULT_API_PORT)
+    if ui_port == 8080 or api_port == 3000:
+        die("refusing ports 8080 and 3000; those belong to a normal local session")
+    if not port_is_free(ui_port):
+        die(f"UI port {ui_port} is already in use")
+    if not port_is_free(api_port):
+        die(f"API port {api_port} is already in use")
+
+    secrets = load_secrets()
+    bun = bun_bin()
+    if not (FRONTEND_DIR / "node_modules").is_dir():
+        die("frontend/node_modules is missing. Run bun install in frontend/")
+    if not (BACKEND_DIR / "node_modules").is_dir():
+        die("backend/node_modules is missing. Run bun install in backend/")
+    next_bin = FRONTEND_DIR / "node_modules/next/dist/bin/next"
+    if not next_bin.is_file():
+        die(f"missing {next_bin}. Run bun install in frontend/")
+
+    api_env = dict(os.environ)
+    api_env.update(secrets)
+    api_env["PORT"] = str(api_port)
+    api_env["MONGODB_URI"] = rewrite_mongo_uri(secrets["MONGODB_URI"])
+    api_env["REDIS_URL"] = rewrite_redis_uri(secrets["REDIS_URL"])
+    api_env["S3_BUCKET"] = VERIFY_S3_BUCKET
+
+    ui_env = dict(os.environ)
+    ui_env["API_URL"] = f"http://127.0.0.1:{api_port}"
+    ui_env["PORT"] = str(ui_port)
+    ui_env["NEXT_DIST_DIR"] = ".next-verify"
+
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+
+    api_log = RUN_DIR / "api.log"
+    ui_log = RUN_DIR / "ui.log"
+    api_pid = 0
+    ui_pid = 0
+    started_compose = False
+    instance_written = False
+    try:
+        started_compose = ensure_compose()
+        say(f"starting API on {api_port}")
+        api_pid = start_logged(
+            [bun, "src/server.ts"],
+            BACKEND_DIR,
+            api_env,
+            api_log,
+        )
+        wait_http(f"http://127.0.0.1:{api_port}/health", timeout=60)
+        say(f"starting UI on {ui_port}")
+        ui_pid = start_logged(
+            [bun, str(next_bin), "dev", "-p", str(ui_port), "--hostname", "127.0.0.1"],
+            FRONTEND_DIR,
+            ui_env,
+            ui_log,
+        )
+        time.sleep(1)
+        if not pid_alive(ui_pid):
+            die(f"UI exited. See {ui_log}")
+        wait_http(f"http://127.0.0.1:{ui_port}/", timeout=90)
+        write_instance(
+            {
+                "ui_pid": ui_pid,
+                "api_pid": api_pid,
+                "ui_port": ui_port,
+                "api_port": api_port,
+                "ui_url": f"http://127.0.0.1:{ui_port}",
+                "api_url": f"http://127.0.0.1:{api_port}",
+                "started_compose": started_compose,
+                "mongo_db": VERIFY_MONGO_DB,
+                "s3_bucket": VERIFY_S3_BUCKET,
+                "redis_db": int(VERIFY_REDIS_DB),
+            }
+        )
+        instance_written = True
+    finally:
+        if not instance_written:
+            kill_pid(ui_pid)
+            kill_pid(api_pid)
+            if started_compose:
+                stop_compose()
+
+    say(f"ready UI={ui_port} API={api_port} pids ui={ui_pid} api={api_pid}")
+
+
+def cmd_doctor() -> None:
+    instance = read_instance()
+    ui_pid = int(instance["ui_pid"])
+    api_pid = int(instance["api_pid"])
+    ui_port = int(instance["ui_port"])
+    api_port = int(instance["api_port"])
+    ui_url = str(instance["ui_url"])
+    api_url = str(instance["api_url"])
+    problems: list[str] = []
+
+    if ui_port == 8080 or api_port == 3000:
+        problems.append("instance is on the shared 8080/3000 session ports")
+    if not pid_alive(ui_pid):
+        problems.append(f"UI pid {ui_pid} is dead")
+    if not pid_alive(api_pid):
+        problems.append(f"API pid {api_pid} is dead")
+    ui_listeners = listener_pids(ui_port)
+    api_listeners = listener_pids(api_port)
+    if not group_owns_port(ui_pid, ui_port):
+        problems.append(f"UI pid {ui_pid} does not own port {ui_port} (owners {ui_listeners})")
+    if not group_owns_port(api_pid, api_port):
+        problems.append(f"API pid {api_pid} does not own port {api_port} (owners {api_listeners})")
+
+    health_status, health_body = http_get(f"{api_url}/health", timeout=15)
+    if health_status != 200:
+        problems.append(f"GET {api_url}/health -> {health_status}")
+    elif '"status":"ok"' not in health_body.replace(" ", ""):
+        problems.append(f"API health is not ok: {health_body[:200]}")
+
+    ui_status, _ = http_get(f"{ui_url}/", timeout=10)
+    if ui_status != 200:
+        problems.append(f"GET {ui_url}/ -> {ui_status}")
+
+    meetings_status, meetings_body = http_get(f"{ui_url}/api/meetings?page=1&limit=5", timeout=10)
+    if meetings_status != 200:
+        problems.append(f"GET {ui_url}/api/meetings -> {meetings_status}")
+    else:
+        try:
+            payload = json.loads(meetings_body)
+        except json.JSONDecodeError:
+            problems.append("meetings proxy did not return JSON")
+            payload = None
+        if isinstance(payload, dict) and "items" not in payload:
+            problems.append("meetings proxy JSON has no items")
+
+    print(f"ui_url={ui_url}")
+    print(f"api_url={api_url}")
+    print(f"ui_pid={ui_pid}")
+    print(f"api_pid={api_pid}")
+    print(f"mongo_db={instance.get('mongo_db')}")
+    print(f"s3_bucket={instance.get('s3_bucket')}")
+    print(f"redis_db={instance.get('redis_db')}")
+    print(f"started_compose={instance.get('started_compose')}")
+    print(f"artifacts={ARTIFACTS_DIR}")
+    if problems:
+        for problem in problems:
+            print(f"FAIL {problem}")
+        raise SystemExit(1)
+    print("doctor=ok")
+
+
+def cmd_status() -> None:
+    if not INSTANCE_PATH.is_file():
+        print("instance=none")
+        raise SystemExit(0)
+    instance = json.loads(INSTANCE_PATH.read_text())
+    print(json.dumps(instance, indent=2))
+
+
+def cmd_cleanup() -> None:
+    if not INSTANCE_PATH.is_file():
+        say("nothing to clean")
+        return
+    instance = json.loads(INSTANCE_PATH.read_text())
+    ui_pid = int(instance.get("ui_pid", 0))
+    api_pid = int(instance.get("api_pid", 0))
+    ui_port = int(instance.get("ui_port", DEFAULT_UI_PORT))
+    api_port = int(instance.get("api_port", DEFAULT_API_PORT))
+    say(f"stopping pids ui={ui_pid} api={api_pid}")
+    kill_pid(ui_pid)
+    kill_pid(api_pid)
+    wait_port_free(ui_port)
+    wait_port_free(api_port)
+    try:
+        drop_scratch(load_secrets())
+    except SystemExit:
+        say("scratch db drop skipped (no secrets file)")
+    if instance.get("started_compose") is True:
+        say("stopping docker compose that launch started")
+        stop_compose()
+    INSTANCE_PATH.unlink(missing_ok=True)
+    say(f"cleanup done; artifacts kept at {ARTIFACTS_DIR}")
+
+
+def cmd_sample_video() -> None:
+    dest = Path(os.environ.get("FIREFLIES_VERIFY_VIDEO", str(RUN_DIR / "sample.mp4")))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.check_call(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=2:size=320x240:rate=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:duration=2",
+            "-pix_fmt",
+            "yuv420p",
+            "-shortest",
+            str(dest),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    print(str(dest))
+
+
+def usage() -> None:
+    die(
+        "usage: control-fireflies launch|doctor|status|cleanup|sample-video",
+        2,
+    )
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        usage()
+    command = sys.argv[1]
+    if command == "launch":
+        cmd_launch()
+    elif command == "doctor":
+        cmd_doctor()
+    elif command == "status":
+        cmd_status()
+    elif command == "cleanup":
+        cmd_cleanup()
+    elif command == "sample-video":
+        cmd_sample_video()
+    else:
+        usage()
+
+
+if __name__ == "__main__":
+    main()
