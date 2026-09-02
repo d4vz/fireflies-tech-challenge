@@ -23,7 +23,7 @@ Read `features/README.md` before the first click. Drive every entry point the ch
 
 ## Launch
 
-The UI is Next.js. `frontend/package.json` binds `next dev` to 8080. The API is Hono in `backend/` (`bun src/server.ts`, `PORT` or 3000). MongoDB, Redis, and MinIO come from `backend/docker-compose.yml` on 27017, 6379, 9000, and 9001. Those Docker ports cannot be remapped without editing compose, so launch reuses a running compose project and never starts a second one.
+The UI is Next.js. `frontend/package.json` binds `next dev` to 8080. The operator stack can run Hono inside `backend/docker-compose.yml` on 3000. Verify still starts its own Hono process (`bun src/server.ts`) on `FIREFLIES_API_PORT` or 13000. MongoDB, Redis, and MinIO come from that compose file on 27017, 6379, 9000, and 9001. Launch starts only those three services and never starts the compose `api` service. Those Docker ports cannot be remapped without editing compose, so launch reuses a running compose project and never starts a second one.
 
 Launch starts a **new** UI and API on unoccupied ports:
 

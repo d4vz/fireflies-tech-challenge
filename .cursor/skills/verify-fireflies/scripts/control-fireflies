@@ -362,7 +362,7 @@ def ensure_compose() -> bool:
         return False
     say("starting docker compose (mongodb, redis, minio)")
     subprocess.check_call(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d"],
+        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d", "mongodb", "redis", "minio"],
         cwd=BACKEND_DIR,
     )
     deadline = time.time() + 90
@@ -376,7 +376,7 @@ def ensure_compose() -> bool:
 
 def stop_compose() -> None:
     subprocess.check_call(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "stop"],
+        ["docker", "compose", "-f", str(COMPOSE_FILE), "stop", "mongodb", "redis", "minio"],
         cwd=BACKEND_DIR,
     )
 

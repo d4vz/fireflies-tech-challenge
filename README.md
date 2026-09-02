@@ -16,7 +16,7 @@ The backend is one Bun process running [Hono](https://hono.dev). MongoDB is the 
 
 ## LLM usage
 
-I built this project AI-first. The agent workflow is [pstack](https://github.com/cursor/plugins/tree/main/pstack). I use it every session. Unfortunately agents still write sloppy TypeScript. Each child repo installs [anti-slop](https://github.com/dmmulroy/anti-slop/tree/main/skills/install-anti-slop), an Oxlint plugin that rejects the patterns models keep producing: unknown type aliases, value widening, chained assertions. [oxlint](https://oxc.rs/docs/guide/usage/linter) and [oxfmt](https://oxc.rs/docs/guide/usage/formatter) run in pre-commit hooks and again in GitHub Actions on every push. If the code seens like slop, it does not merge.
+I built this project AI-first. The agent workflow is [pstack](https://github.com/cursor/plugins/tree/main/pstack). I use it every session. Unfortunately agents still write sloppy TypeScript. Each child repo installs [anti-slop](https://github.com/dmmulroy/anti-slop/tree/main/skills/install-anti-slop), an Oxlint plugin that rejects the patterns models keep producing: unknown type aliases, value widening, chained assertions. [oxlint](https://oxc.rs/docs/guide/usage/linter) and [oxfmt](https://oxc.rs/docs/guide/usage/formatter) run in pre-commit hooks and again in GitHub Actions on every push. If the code seems like slop, it does not merge.
 
 ### Models
 
@@ -36,37 +36,23 @@ git submodule update --init --recursive
 
 ## Run
 
-You need [Bun](https://bun.sh), [Docker](https://docs.docker.com/get-docker/), and [ffmpeg](https://ffmpeg.org) on your PATH. You also need an [OpenAI](https://platform.openai.com) API key and a [Clerk](https://clerk.com) application. Use the same Clerk app in both repos.
+You need [Docker](https://docs.docker.com/get-docker/) and [Bun](https://bun.sh). Bun is only for the frontend. You also need an [OpenAI](https://platform.openai.com) API key and a [Clerk](https://clerk.com) application. Use the same Clerk app in both repos.
 
 ```
 curl -fsSL https://bun.sh/install | bash
 ```
 
-On macOS:
-
-```
-brew install ffmpeg
-```
-
-On Debian or Ubuntu:
-
-```
-sudo apt install ffmpeg
-```
-
-MongoDB, Redis, and MinIO come from the backend compose file. I used the Atlas local image so `$vectorSearch` works on your machine.
+The backend is one compose project: Hono, MongoDB, Redis, and MinIO. I used the Atlas local image so `$vectorSearch` works on your machine. ffmpeg is already in the API image.
 
 ```
 cd backend
-docker compose up -d
 cp .env.example .env
 ```
 
-Fill in `OPENAI_API_KEY` and `CLERK_SECRET_KEY`. The rest of `.env.example` already points at compose.
+Fill in `OPENAI_API_KEY` and `CLERK_SECRET_KEY`. Then start the whole backend:
 
 ```
-bun install
-bun run dev
+docker compose up --build
 ```
 
 The API listens on `http://localhost:3000`.
@@ -76,7 +62,7 @@ cd ../frontend
 cp .env.example .env.local
 ```
 
-Put the Clerk publishable key and secret key there. `API_URL` already points at the local Hono server. Next.js talks to the backend. The browser does not. Build and start the production server. Do not use `next dev`.
+Put the Clerk publishable key and secret key there. `API_URL` already points at `http://localhost:3000`. Next.js talks to the backend. The browser does not. The frontend does not run in Docker, and it does not need a new env key. Build and start the production server. Do not use `next dev`.
 
 ```
 bun install
@@ -85,4 +71,6 @@ bun run start
 ```
 
 Open `http://localhost:8080`. Clerk's development handshake hangs on `127.0.0.1`, so stay on `localhost`.
+
+To run Hono on the host instead of in compose, start only the data stores (`docker compose up -d mongodb redis minio`), install [ffmpeg](https://ffmpeg.org), then `bun install` and `bun run dev` in `backend/`.
 
