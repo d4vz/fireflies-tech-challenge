@@ -73,6 +73,8 @@ Then start the whole stack:
 docker compose up --build
 ```
 
+The first run is slow: it pulls MongoDB Atlas Local and builds Next.js. Later starts can omit `--build` unless app code changed.
+
 Open `http://localhost:8080`. Clerk's development handshake hangs on `127.0.0.1`, so stay on `localhost`. The API listens on `http://localhost:3000`. Next.js talks to Hono on the Compose network (`http://api:3000`). The browser does not.
 
 ## Next steps
