@@ -1,6 +1,6 @@
 # Fireflies Clone
 
-This is the parent repository. Backend and frontend live in their own Git repos and are pulled in as [Git submodules](https://docs.github.com/en/repositories/working-with-files/using-files/working-with-submodules). This repo only pins the SHAs for [backend](https://github.com/d4vz/fireflies-tech-challenge-backend) and [frontend](https://github.com/d4vz/fireflies-tech-challenge-frontend).
+This is the parent repository. Backend and frontend live in their own Git repos and are pulled in as [Git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules). This repo only pins the SHAs for [backend](https://github.com/d4vz/fireflies-tech-challenge-backend) and [frontend](https://github.com/d4vz/fireflies-tech-challenge-frontend).
 
 **Why Git Modules?** I split the apps into two repositories instead of a monorepo. Separate repos are easier to work with, and they map better to Railway, where I deployed each app as its own service.
 
