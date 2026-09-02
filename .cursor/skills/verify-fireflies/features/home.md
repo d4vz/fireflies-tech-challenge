@@ -35,4 +35,4 @@ Preconditions:
 - Home stays on a skeleton until both the meetings fetch and a client clock tick finish. Wait for the greeting, not a fixed sleep.
 - Insight cards stay three (`Meetings`, `In progress`, `Tasks`). A busy library does not add a fourth card titled with `sourceId`.
 - A failed fetch shows `could not load meetings` in danger text. That is not empty-library proof. Re-run doctor.
-- Home shows at most two meetings. A third library row is only on `/meetings`.
+- Home shows at most three meetings. A fourth library row is only on `/meetings`.

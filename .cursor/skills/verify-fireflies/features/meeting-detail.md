@@ -6,7 +6,7 @@ Meeting detail is `/meetings/:id`. It plays the stored media, shows processing s
 
 - `detail-open` shows `meeting.name` as the page `h1` and a status chip.
 - `detail-media` renders stored media. Video uses `<video>` with a thumbnail poster. Audio uses a Mic plus native `<audio controls>`. Both fetch `/api/meetings/<id>/video`.
-- `detail-summary` shows Summary. Queued and processing show a summary skeleton. Ready/failed with no text shows `(no summary)`. Tasks show a skeleton while queued or processing, a checklist when tasks exist, and nothing when the meeting is ready or failed with no tasks.
+- `detail-summary` shows Summary. Queued and processing show a summary skeleton (`aria-label` `Loading summary`), not `(no summary)`. Tasks show a skeleton while queued or processing, a checklist when tasks exist, and nothing when the meeting is ready or failed with no tasks.
 - `detail-transcript` shows speaker turns when status is `ready` and turns exist, `(empty transcript)` when there are no turns, and a pending skeleton while status is queued or processing.
 - `detail-missing` shows `meeting not found` for an unknown id.
 
