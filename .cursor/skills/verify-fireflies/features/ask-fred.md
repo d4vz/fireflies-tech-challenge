@@ -26,13 +26,13 @@ Preconditions:
 - Viewport is 1440x900. At this width AskFred docks on the right when `fred=open` (`xl`). Below `xl` it is a right sheet titled `AskFred`.
 - Start on `ui_url` `/`.
 
-- **Header entry.** Choose header `AskFred`. Run `browser_click` the link named `AskFred` in the header (`aria-label=AskFred`). URL includes `fred=1`. The panel heading is `AskFred`. The first assistant line is `Hi Davi! Get ready for your meeting.`
+- **Header entry.** Choose header `AskFred`. Run `browser_click` the link named `AskFred` in the header (`aria-label=AskFred`). URL includes `fred=1`. The panel heading is `AskFred`. The first assistant line is `Hi Verify! Get ready for your meeting.` (`Verify` is the launch Clerk first name via `displayName`).
 - **Close.** Choose `Close AskFred`. Run `browser_click` the link named `Close AskFred`. URL no longer has `fred`. The dock/sheet is gone.
 - **Sidebar entry.** Choose sidebar `AskFred`. Run `browser_click` the nav link named `AskFred`. URL includes `fred=1` and the panel is back. From `/meetings` this same control goes to `/?fred=1`.
 - **URL entry.** Open `/?fred=1` directly. Run `browser_navigate` to `{ui_url}/?fred=1`. Same panel as header entry.
 - **Type and send.** The `Ask Fred` field placeholder is `Ask anything here`. Type `what is queued`, then send. Run `browser_fill` on the textbox named `Ask Fred` with `what is queued`, then `browser_click` the button named `Send`. A user bubble with `what is queued` appears, then streamed assistant text (not the old `I can prep from the meetings...` line). A failed stream shows danger text under the chips; a successful send does not.
-- **Chip.** Choose `What's my day looking like?`. Run `browser_click` that button. A user bubble with that chip text appears, then streamed assistant text.
-- **Proof.** `artifacts/ask-fred/open.aria.txt` and `open.png` show the dock, `Hi Davi!`, and `fred=1` in the URL. `artifacts/ask-fred/sent.aria.txt` and `sent.png` show the user bubble and streamed assistant text.
+- **Chip.** Choose `What's my day looking like?` or `Pending tasks across all meetings`. Run `browser_click` that button. A user bubble with that chip text appears, then streamed assistant text. After the first assistant reply, the chips are gone.
+- **Proof.** `artifacts/ask-fred/open.aria.txt` and `open.png` show the dock, `Hi Verify!`, and `fred=1` in the URL. `artifacts/ask-fred/sent.aria.txt` and `sent.png` show the user bubble and streamed assistant text.
 
 ## Gotchas
 
@@ -41,5 +41,5 @@ Preconditions:
 - On Home it keeps `tab` and `q` (`/?tab=busy&q=eng&fred=1`).
 - `fred=0` is a closed chrome state, not the default. Default Home has no `fred` query. Close uses `fred` unset, not `0`.
 - Blank submit does nothing. Trimmed empty strings do not add bubbles.
-- Placeholder chips stay visible after send. Clicking one again sends that chip again.
+- Placeholder chips hide after the first assistant reply. They are `What's my day looking like?` and `Pending tasks across all meetings`.
 - At 1440px the sheet is `xl:hidden` and the dock is visible. A snapshot that only looks for `dialog` / sheet will miss the dock. Read the right-hand `AskFred` heading.

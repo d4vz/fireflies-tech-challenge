@@ -80,14 +80,13 @@ Stable handles (from the running UI, not CSS):
 | `Home` | link, `aria-current=page` on `/` | sidebar |
 | `Meetings` | link | sidebar |
 | `AskFred` | link in sidebar; link `aria-label=AskFred` in the header | both |
-| `Search meetings` | textbox | header (md+) and Home (mobile) |
-| `Capture` | button | header. This starts screen recording, not upload. |
+| `Capture` | button | header. Opens the Meeting name dialog, then screen recording. Not file upload. |
 | `Upload` | button `aria-label=Upload` | header chevron, then menu item `Upload` |
 | `Close AskFred` | link | AskFred panel |
 | `Ask Fred` | textbox | AskFred composer. Placeholder `Ask anything here`. |
 | `Send` | button | AskFred composer |
-| `All` / `Ready` / `Busy` / `Failed` | links | Home tabs |
-| `View all meetings` / `View more` | links | Home empty / populated |
+| `Last meetings` | heading | Home preview section |
+| `view more` | link | Home, beside Last meetings |
 | `Open navigation` | button | header, below md |
 | `Transcript` | button | meeting detail, below lg |
 
