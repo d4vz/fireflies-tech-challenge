@@ -78,7 +78,7 @@ Stable handles (from the running UI, not CSS):
 | `AskFred` | link in sidebar; link `aria-label=AskFred` in the header | both |
 | `Search meetings` | textbox | header (md+) and Home (mobile) |
 | `Capture` | button | header. This starts screen recording, not upload. |
-| `Upload video` | button `aria-label=Upload video` | header chevron, then menu item `Upload video` |
+| `Upload` | button `aria-label=Upload` | header chevron, then menu item `Upload` |
 | `Close AskFred` | link | AskFred panel |
 | `Ask Fred` | textbox | AskFred composer. Placeholder `Ask anything here`. |
 | `Send` | button | AskFred composer |
@@ -87,7 +87,7 @@ Stable handles (from the running UI, not CSS):
 | `Open navigation` | button | header, below md |
 | `Transcript` | button | meeting detail, below lg |
 
-Document title is `Meetings`. Workspace chrome shows `Davi`. Greeting on Home is `Good Morning, Davi`, `Good Afternoon, Davi`, or `Good Evening, Davi` from local time. Empty Home copy is `No meetings in this view.` Empty list copy is `No meetings yet. Capture a video to start.` Status chips are `Queued`, `Processing`, `Ready`, `Failed`.
+Document title is `Meetings`. Workspace chrome shows `Davi`. Greeting on Home is `Good Morning, Davi`, `Good Afternoon, Davi`, or `Good Evening, Davi` from local time. Empty Home copy is `No meetings in this view.` Empty list copy is `No meetings yet. Capture or upload a file to start.` Status chips are `Queued`, `Processing`, `Ready`, `Failed`. Audio rows include sr-only `Audio recording` in the link name.
 
 The browser talks only to Next `/api/*`. Home and list poll every 2s while any row is queued or processing.
 
@@ -127,8 +127,9 @@ All invocations from repo root, executable bit on:
 .cursor/skills/verify-fireflies/scripts/control-fireflies status
 .cursor/skills/verify-fireflies/scripts/control-fireflies cleanup
 .cursor/skills/verify-fireflies/scripts/control-fireflies sample-video
+.cursor/skills/verify-fireflies/scripts/control-fireflies sample-audio
 ```
 
-`sample-video` prints a 2s mp4 path (default `.run/sample.mp4`). Use it only for Capture.
+`sample-video` prints a 2s mp4 path (default `.run/sample.mp4`). `sample-audio` prints a 2s mp3 path (default `.run/sample.mp3`). Use them only for Capture.
 
-Optional env: `FIREFLIES_VERIFY_ENV`, `FIREFLIES_UI_PORT`, `FIREFLIES_API_PORT`, `FIREFLIES_VERIFY_VIDEO`. If `FIREFLIES_VERIFY_ENV` is unset, launch reads `backend/.env` and then `backend/.env.local`.
+Optional env: `FIREFLIES_VERIFY_ENV`, `FIREFLIES_UI_PORT`, `FIREFLIES_API_PORT`, `FIREFLIES_VERIFY_VIDEO`, `FIREFLIES_VERIFY_AUDIO`. If `FIREFLIES_VERIFY_ENV` is unset, launch reads `backend/.env` and then `backend/.env.local`.

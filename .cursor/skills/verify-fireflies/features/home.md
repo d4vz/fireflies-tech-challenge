@@ -4,7 +4,7 @@ Home is `/`. It greets `Davi`, shows insight cards for the current library sampl
 
 ## Sub-features
 
-- `home-load` renders the greeting, workspace name, and three insight cards after meetings fetch. A fourth card appears when any fetched meeting is busy: its title is that meeting's `sourceId` and its body is `Processing for …`.
+- `home-load` renders the greeting, workspace name, and three insight cards after meetings fetch (`Meetings`, `In progress`, `Tasks`). Busy meetings raise the In progress count. There is no fourth card titled with a meeting `sourceId`.
 - `home-empty` shows empty copy and `View all meetings` when no rows match.
 - `home-tabs` filters rows by All, Ready, Busy, and Failed without leaving `/`.
 - `home-search` filters by `sourceId` or summary text from the header search box.
@@ -25,7 +25,7 @@ Preconditions:
 - The verify database is empty unless a later bullet says otherwise.
 
 - **Open Home.** Go to `ui_url`. Run `browser_navigate` to `http://127.0.0.1:18080/`. The heading is `Home`. The greeting matches `Good (Morning|Afternoon|Evening), Davi`. The sidebar `Home` link is `aria-current=page`.
-- **Read insights.** Wait until the Home skeleton is gone. Three cards read `Meetings` / `0 in the library`, `In progress` / `0 processing`, `Tasks` / `0 action items` on an empty library. A fourth card (title = busy `sourceId`, body `Processing for …`) is absent until a queued or processing meeting exists.
+- **Read insights.** Wait until the Home skeleton is gone. Three cards read `Meetings` / `0 in the library`, `In progress` / `0 processing`, `Tasks` / `0 action items` on an empty library. There is never a fourth insight card. `Processing for …` does not appear. After an upload the Meetings count rises. In progress stays a count card, not a `sourceId` title.
 - **Empty copy.** The page contains `No meetings in this view.` and a `View all meetings` link.
 - **Meetings entry.** Choose `View all meetings`. Run `browser_snapshot`, then `browser_click` the link named `View all meetings`. The heading becomes `Meetings` and the URL path is `/meetings`.
 - **Return Home.** Choose sidebar `Home`. Run `browser_click` the link named `Home`. URL path is `/`.
@@ -36,6 +36,7 @@ Preconditions:
 ## Gotchas
 
 - Home stays on a skeleton until both the meetings fetch and a client clock tick finish. Wait for the greeting, not a fixed sleep.
+- Insight cards stay three (`Meetings`, `In progress`, `Tasks`). A busy library does not add a fourth card titled with `sourceId`.
 - A failed fetch shows `could not load meetings` in danger text. That is not empty-library proof. Re-run doctor.
 - Tab labels omit the count when the count is 0. Do not require `All 0`.
 - Header search is `md+` only. The 1440px viewport is required for that box. Below `md`, search is inside the Home canvas.
