@@ -17,6 +17,7 @@ from typing import Any
 
 REQUIRED_SECRETS = (
     "OPENAI_API_KEY",
+    "ASSEMBLYAI_API_KEY",
     "MONGODB_URI",
     "S3_ENDPOINT",
     "S3_ACCESS_KEY",
@@ -104,7 +105,7 @@ def load_secrets() -> dict[str, str]:
         die(
             f"missing secrets file {path}. Put backend/.env or backend/.env.local "
             "in place, or set FIREFLIES_VERIFY_ENV to a file with OPENAI_API_KEY, "
-            "MONGODB_URI, REDIS_URL, CLERK_SECRET_KEY, and the S3_* keys. "
+            "ASSEMBLYAI_API_KEY, MONGODB_URI, REDIS_URL, CLERK_SECRET_KEY, and the S3_* keys. "
             "Do not print those values."
         )
     merged = dict(os.environ)
