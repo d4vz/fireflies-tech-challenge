@@ -583,9 +583,30 @@ def cmd_sample_video() -> None:
     print(str(dest))
 
 
+def cmd_sample_audio() -> None:
+    dest = Path(os.environ.get("FIREFLIES_VERIFY_AUDIO", str(RUN_DIR / "sample.mp3")))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.check_call(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:duration=2",
+            "-q:a",
+            "9",
+            str(dest),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    print(str(dest))
+
+
 def usage() -> None:
     die(
-        "usage: control-fireflies launch|doctor|status|cleanup|sample-video",
+        "usage: control-fireflies launch|doctor|status|cleanup|sample-video|sample-audio",
         2,
     )
 
@@ -604,6 +625,8 @@ def main() -> None:
         cmd_cleanup()
     elif command == "sample-video":
         cmd_sample_video()
+    elif command == "sample-audio":
+        cmd_sample_audio()
     else:
         usage()
 
