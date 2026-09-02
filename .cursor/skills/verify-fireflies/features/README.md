@@ -5,10 +5,10 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Baseline preconditions
 
 - Launch with `.cursor/skills/verify-fireflies/scripts/control-fireflies launch`.
-- Doctor must print `doctor=ok` for `http://127.0.0.1:18080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:13000` (or `FIREFLIES_API_PORT`).
+- Doctor must print `doctor=ok` for `http://localhost:18080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:13000` (or `FIREFLIES_API_PORT`).
 - Mongo database is `fireflies_verify`. It starts empty unless a feature seeds it through the UI or the Next upload route.
 - Viewport 1440x900 (`Emulation.setDeviceMetricsOverride`).
-- Never open `http://127.0.0.1:8080` or `http://127.0.0.1:3000`.
+- Never open `http://127.0.0.1:8080`, `http://localhost:8080`, or `http://127.0.0.1:3000`.
 - Never drive an instance whose pids are missing from `.cursor/skills/verify-fireflies/.run/instance.json`.
 
 ## Driving conventions
