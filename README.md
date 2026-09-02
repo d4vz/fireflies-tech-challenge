@@ -36,6 +36,7 @@ If you want something cheaper or local-first, those jobs could also run on [whis
 
 ```
 git clone --recurse-submodules https://github.com/d4vz/fireflies-tech-challenge.git
+cd fireflies-tech-challenge
 ```
 
 If you already cloned without submodules:
@@ -46,43 +47,33 @@ git submodule update --init --recursive
 
 ## Run
 
-You need [Docker](https://docs.docker.com/get-docker/) and [Bun](https://bun.sh). Bun is only for the frontend. You also need an [OpenAI](https://platform.openai.com) API key, an [AssemblyAI](https://www.assemblyai.com) API key, and a [Clerk](https://clerk.com) application. Use the same Clerk app in both repos.
+You need [Docker](https://docs.docker.com/get-docker/), an [OpenAI](https://platform.openai.com) API key, an [AssemblyAI](https://www.assemblyai.com) API key, and a [Clerk](https://clerk.com) application. Use the same Clerk app in both services.
+
+The parent `docker-compose.yml` includes [backend/docker-compose.yml](backend/docker-compose.yml) and [frontend/docker-compose.yml](frontend/docker-compose.yml). One `.env` in this directory is enough.
 
 ```
-curl -fsSL https://bun.sh/install | bash
-```
-
-The backend is one compose project: Hono, MongoDB, Redis, and MinIO. I used the Atlas local image so `$vectorSearch` works on your machine. ffmpeg is already in the API image.
-
-```
-cd backend
 cp .env.example .env
 ```
 
-Fill in `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, and `CLERK_SECRET_KEY`. Then start the whole backend:
+Fill the keys. OpenAI and AssemblyAI stay on the backend. Clerk is shared:
+
+```
+# backend only
+OPENAI_API_KEY=sk-proj-your-openai-key
+ASSEMBLYAI_API_KEY=your-assemblyai-key
+
+# same Clerk app in both services
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_your-clerk-publishable-key
+CLERK_SECRET_KEY=sk_test_your-clerk-secret-key
+```
+
+Then start the whole stack:
 
 ```
 docker compose up --build
 ```
 
-The API listens on `http://localhost:3000`. On Railway, set those same keys on the API service.
-
-```
-cd ../frontend
-cp .env.example .env.local
-```
-
-Put the Clerk publishable key and secret key there. `API_URL` already points at `http://localhost:3000`. Next.js talks to the backend. The browser does not. The frontend does not run in Docker, and it does not need a new env key. Build and start the production server. Do not use `next dev`.
-
-```
-bun install
-bun run build
-bun run start
-```
-
-Open `http://localhost:8080`. Clerk's development handshake hangs on `127.0.0.1`, so stay on `localhost`.
-
-To run Hono on the host instead of in compose, start only the data stores (`docker compose up -d mongodb redis minio`), install [ffmpeg](https://ffmpeg.org), then `bun install` and `bun run dev` in `backend/`.
+Open `http://localhost:8080`. Clerk's development handshake hangs on `127.0.0.1`, so stay on `localhost`. The API listens on `http://localhost:3000`. Next.js talks to Hono on the Compose network (`http://api:3000`). The browser does not.
 
 ## Next steps
 
