@@ -23,6 +23,7 @@ REQUIRED_SECRETS = (
     "S3_SECRET_KEY",
     "S3_BUCKET",
     "REDIS_URL",
+    "CLERK_SECRET_KEY",
 )
 
 # Local compose values from backend/docker-compose.yml. Used only when the
@@ -44,7 +45,12 @@ SKILL_DIR = SCRIPT_DIR.parent
 REPO_ROOT = SKILL_DIR.parent.parent.parent
 RUN_DIR = SKILL_DIR / ".run"
 INSTANCE_PATH = RUN_DIR / "instance.json"
+SESSION_JWT_PATH = RUN_DIR / "session.jwt"
+AGENT_TASK_PATH = RUN_DIR / "agent-task.url"
 ARTIFACTS_DIR = SKILL_DIR / "artifacts"
+CLERK_API = "https://api.clerk.com/v1"
+CLERK_UA = "Mozilla/5.0 (compatible; verify-fireflies/1.0)"
+VERIFY_DISPLAY_NAME = "Verify"
 BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 COMPOSE_FILE = BACKEND_DIR / "docker-compose.yml"
@@ -98,7 +104,8 @@ def load_secrets() -> dict[str, str]:
         die(
             f"missing secrets file {path}. Put backend/.env or backend/.env.local "
             "in place, or set FIREFLIES_VERIFY_ENV to a file with OPENAI_API_KEY, "
-            "MONGODB_URI, REDIS_URL, and the S3_* keys. Do not print those values."
+            "MONGODB_URI, REDIS_URL, CLERK_SECRET_KEY, and the S3_* keys. "
+            "Do not print those values."
         )
     merged = dict(os.environ)
     merged.update(load_dotenv(path))
@@ -212,9 +219,22 @@ def write_instance(data: dict[str, Any]) -> None:
     INSTANCE_PATH.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def http_get(url: str, timeout: float = 5) -> tuple[int, str]:
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def http_error_302(self, req, fp, code, msg, headers):  # noqa: ANN001
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def http_get(
+    url: str,
+    timeout: float = 5,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, str]:
+    request = urllib.request.Request(url, headers=headers or {}, method="GET")
+    opener = urllib.request.build_opener(NoRedirect)
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
             return response.status, body
     except urllib.error.HTTPError as error:
@@ -224,12 +244,98 @@ def http_get(url: str, timeout: float = 5) -> tuple[int, str]:
         return 0, str(error)
 
 
+def clerk_request(secret_key: str, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(
+        f"{CLERK_API}{path}",
+        data=payload,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {secret_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": CLERK_UA,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        if method == "DELETE":
+            return {}
+        die(f"Clerk {method} {path} -> {error.code}")
+    if raw == "":
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        die(f"Clerk {method} {path} returned a non-object")
+    return parsed
+
+
+def create_clerk_verify_session(secret_key: str, redirect_url: str) -> dict[str, str]:
+    email = f"verify-{int(time.time())}@example.com"
+    user_id = ""
+    try:
+        user = clerk_request(
+            secret_key,
+            "POST",
+            "/users",
+            {
+                "email_address": [email],
+                "first_name": VERIFY_DISPLAY_NAME,
+                "skip_password_requirement": True,
+            },
+        )
+        user_id = str(user.get("id", ""))
+        if user_id == "":
+            die("Clerk create user did not return an id")
+        session = clerk_request(secret_key, "POST", "/sessions", {"user_id": user_id})
+        session_id = str(session.get("id", ""))
+        if session_id == "":
+            die("Clerk create session did not return an id")
+        token = clerk_request(secret_key, "POST", f"/sessions/{session_id}/tokens", {"expires_in_seconds": 3600})
+        jwt = str(token.get("jwt", ""))
+        if jwt == "":
+            die("Clerk session token did not return a jwt")
+        task = clerk_request(
+            secret_key,
+            "POST",
+            "/agents/tasks",
+            {
+                "on_behalf_of": {"user_id": user_id},
+                "permissions": "*",
+                "agent_name": "verify-fireflies",
+                "task_description": "open the signed-in app",
+                "redirect_url": redirect_url,
+            },
+        )
+        agent_url = str(task.get("url", ""))
+        if agent_url == "":
+            die("Clerk agent task did not return a url")
+        return {
+            "user_id": user_id,
+            "jwt": jwt,
+            "agent_url": agent_url,
+            "display_name": VERIFY_DISPLAY_NAME,
+        }
+    except BaseException:
+        if user_id:
+            delete_clerk_user(secret_key, user_id)
+        raise
+
+
+def delete_clerk_user(secret_key: str, user_id: str) -> None:
+    if user_id == "":
+        return
+    clerk_request(secret_key, "DELETE", f"/users/{user_id}")
+
+
 def wait_http(url: str, timeout: float, ok: tuple[int, ...] = (200,)) -> tuple[int, str]:
     deadline = time.time() + timeout
     last_status = 0
     last_body = ""
     while time.time() < deadline:
-        last_status, last_body = http_get(url, timeout=3)
+        last_status, last_body = http_get(url, timeout=8)
         if last_status in ok:
             return last_status, last_body
         time.sleep(0.5)
@@ -290,22 +396,28 @@ def start_logged(command: list[str], cwd: Path, env: dict[str, str], log_path: P
     return proc.pid
 
 
+def signal_pid(pid: int, sig: int) -> None:
+    try:
+        os.killpg(pid, sig)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            return
+
+
 def kill_pid(pid: int) -> None:
     if pid <= 0 or not pid_alive(pid):
         return
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
+    signal_pid(pid, signal.SIGTERM)
     deadline = time.time() + 8
     while time.time() < deadline:
         if not pid_alive(pid):
             return
         time.sleep(0.2)
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
+    signal_pid(pid, signal.SIGKILL)
 
 
 def drop_scratch(env: dict[str, str]) -> None:
@@ -402,6 +514,7 @@ def cmd_launch() -> None:
     api_env["MONGODB_URI"] = rewrite_mongo_uri(secrets["MONGODB_URI"])
     api_env["REDIS_URL"] = rewrite_redis_uri(secrets["REDIS_URL"])
     api_env["S3_BUCKET"] = VERIFY_S3_BUCKET
+    api_env["FRONTEND_ORIGIN"] = f"http://localhost:{ui_port}"
 
     ui_env = dict(os.environ)
     ui_env["API_URL"] = f"http://127.0.0.1:{api_port}"
@@ -417,6 +530,7 @@ def cmd_launch() -> None:
     ui_pid = 0
     started_compose = False
     instance_written = False
+    clerk_user_id = ""
     try:
         started_compose = ensure_compose()
         say(f"starting API on {api_port}")
@@ -429,7 +543,7 @@ def cmd_launch() -> None:
         wait_http(f"http://127.0.0.1:{api_port}/health", timeout=60)
         say(f"starting UI on {ui_port}")
         ui_pid = start_logged(
-            [bun, str(next_bin), "dev", "-p", str(ui_port), "--hostname", "127.0.0.1"],
+            [bun, str(next_bin), "dev", "-p", str(ui_port), "--hostname", "localhost"],
             FRONTEND_DIR,
             ui_env,
             ui_log,
@@ -437,30 +551,43 @@ def cmd_launch() -> None:
         time.sleep(1)
         if not pid_alive(ui_pid):
             die(f"UI exited. See {ui_log}")
-        wait_http(f"http://127.0.0.1:{ui_port}/", timeout=90)
+        ui_url = f"http://localhost:{ui_port}"
+        wait_http(f"{ui_url}/sign-in", timeout=90)
+        say("creating Clerk verify session")
+        session = create_clerk_verify_session(secrets["CLERK_SECRET_KEY"], f"{ui_url}/")
+        clerk_user_id = session["user_id"]
+        SESSION_JWT_PATH.write_text(session["jwt"])
+        AGENT_TASK_PATH.write_text(session["agent_url"])
         write_instance(
             {
                 "ui_pid": ui_pid,
                 "api_pid": api_pid,
                 "ui_port": ui_port,
                 "api_port": api_port,
-                "ui_url": f"http://127.0.0.1:{ui_port}",
+                "ui_url": ui_url,
                 "api_url": f"http://127.0.0.1:{api_port}",
                 "started_compose": started_compose,
                 "mongo_db": VERIFY_MONGO_DB,
                 "s3_bucket": VERIFY_S3_BUCKET,
                 "redis_db": int(VERIFY_REDIS_DB),
+                "clerk_user_id": clerk_user_id,
+                "display_name": session["display_name"],
             }
         )
         instance_written = True
     finally:
         if not instance_written:
+            if clerk_user_id:
+                delete_clerk_user(secrets["CLERK_SECRET_KEY"], clerk_user_id)
+            SESSION_JWT_PATH.unlink(missing_ok=True)
+            AGENT_TASK_PATH.unlink(missing_ok=True)
             kill_pid(ui_pid)
             kill_pid(api_pid)
             if started_compose:
                 stop_compose()
 
     say(f"ready UI={ui_port} API={api_port} pids ui={ui_pid} api={api_pid}")
+    say(f"display_name={VERIFY_DISPLAY_NAME} session=ready")
 
 
 def cmd_doctor() -> None:
@@ -492,13 +619,31 @@ def cmd_doctor() -> None:
     elif '"status":"ok"' not in health_body.replace(" ", ""):
         problems.append(f"API health is not ok: {health_body[:200]}")
 
-    ui_status, _ = http_get(f"{ui_url}/", timeout=10)
-    if ui_status != 200:
-        problems.append(f"GET {ui_url}/ -> {ui_status}")
+    sign_in_status, _ = http_get(f"{ui_url}/sign-in", timeout=15)
+    if sign_in_status != 200:
+        problems.append(f"GET {ui_url}/sign-in -> {sign_in_status}")
 
-    meetings_status, meetings_body = http_get(f"{ui_url}/api/meetings?page=1&limit=5", timeout=10)
+    ui_status, _ = http_get(f"{ui_url}/", timeout=10)
+    if ui_status not in (301, 302, 303, 307, 308):
+        problems.append(f"GET {ui_url}/ without session -> {ui_status} (want redirect to sign-in)")
+
+    unsigned_meetings, _ = http_get(f"{ui_url}/api/meetings?page=1&limit=5", timeout=10)
+    if unsigned_meetings not in (401, 302, 303, 307, 308):
+        problems.append(f"GET {ui_url}/api/meetings without session -> {unsigned_meetings}")
+
+    jwt = SESSION_JWT_PATH.read_text().strip() if SESSION_JWT_PATH.is_file() else ""
+    if jwt == "":
+        problems.append("missing Clerk session jwt; re-run launch")
+        meetings_status = 0
+        meetings_body = ""
+    else:
+        meetings_status, meetings_body = http_get(
+            f"{api_url}/meetings?page=1&limit=5",
+            timeout=15,
+            headers={"Authorization": f"Bearer {jwt}"},
+        )
     if meetings_status != 200:
-        problems.append(f"GET {ui_url}/api/meetings -> {meetings_status}")
+        problems.append(f"GET {api_url}/meetings with Bearer -> {meetings_status}")
     else:
         try:
             payload = json.loads(meetings_body)
@@ -516,6 +661,8 @@ def cmd_doctor() -> None:
     print(f"s3_bucket={instance.get('s3_bucket')}")
     print(f"redis_db={instance.get('redis_db')}")
     print(f"started_compose={instance.get('started_compose')}")
+    print(f"display_name={instance.get('display_name')}")
+    print("session=ready" if SESSION_JWT_PATH.is_file() else "session=missing")
     print(f"artifacts={ARTIFACTS_DIR}")
     if problems:
         for problem in problems:
@@ -547,13 +694,17 @@ def cmd_cleanup() -> None:
     wait_port_free(ui_port)
     wait_port_free(api_port)
     try:
-        drop_scratch(load_secrets())
+        secrets = load_secrets()
+        delete_clerk_user(secrets["CLERK_SECRET_KEY"], str(instance.get("clerk_user_id", "")))
+        drop_scratch(secrets)
     except SystemExit:
         say("scratch db drop skipped (no secrets file)")
     if instance.get("started_compose") is True:
         say("stopping docker compose that launch started")
         stop_compose()
     INSTANCE_PATH.unlink(missing_ok=True)
+    SESSION_JWT_PATH.unlink(missing_ok=True)
+    AGENT_TASK_PATH.unlink(missing_ok=True)
     say(f"cleanup done; artifacts kept at {ARTIFACTS_DIR}")
 
 
@@ -604,9 +755,17 @@ def cmd_sample_audio() -> None:
     print(str(dest))
 
 
+def cmd_session() -> None:
+    instance = read_instance()
+    print(f"display_name={instance.get('display_name', VERIFY_DISPLAY_NAME)}")
+    print("cookie_name=__session")
+    print(f"cookie_file={SESSION_JWT_PATH}")
+    print(f"agent_task_file={AGENT_TASK_PATH}")
+
+
 def usage() -> None:
     die(
-        "usage: control-fireflies launch|doctor|status|cleanup|sample-video|sample-audio",
+        "usage: control-fireflies launch|doctor|status|session|cleanup|sample-video|sample-audio",
         2,
     )
 
@@ -621,6 +780,8 @@ def main() -> None:
         cmd_doctor()
     elif command == "status":
         cmd_status()
+    elif command == "session":
+        cmd_session()
     elif command == "cleanup":
         cmd_cleanup()
     elif command == "sample-video":

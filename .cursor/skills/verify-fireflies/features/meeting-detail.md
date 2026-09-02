@@ -27,7 +27,7 @@ Preconditions:
 - **Media.** For `blob.kind` video the page includes a `video` whose `src` is `/api/meetings/<id>/video` and `poster` is `/api/meetings/<id>/thumbnail`. For `blob.kind` audio the page includes `audio` with `controls` and the same `/video` src. There is no `<video>` and no poster. Prove both kinds when both exist in the library.
 - **Summary block.** Headings `Summary`, `Takeaways`, and `Action items` are visible. Empty summary text is `(no summary)`.
 - **Transcript dock.** On the right, heading `Transcript` (screen-reader text ` for <sourceId>`). Ready with chunks shows the joined chunk text. Ready/failed with no chunks shows `(empty transcript)`. Queued/processing shows the transcript skeleton until status is `Ready` (the dock does not fetch chunks while busy).
-- **Unknown id.** Open `/meetings/missing`. Run `browser_navigate` to `http://127.0.0.1:18080/meetings/missing`. Main copy is `meeting not found`.
+- **Unknown id.** Open `/meetings/missing`. Run `browser_navigate` to `{ui_url}/meetings/missing`. Main copy is `meeting not found`.
 - **Proof.** Save `artifacts/meeting-detail/detail.aria.txt` and `detail.png` with `sourceId`, status, and the Summary heading. Save `GET <ui_url>/api/meetings/<id>` as `meeting.json`. For a ready meeting also save `GET <ui_url>/api/meetings/<id>/transcripts` as `transcripts.json`.
 
 ## Gotchas

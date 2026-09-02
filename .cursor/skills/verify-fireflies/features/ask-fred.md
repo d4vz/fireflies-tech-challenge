@@ -29,7 +29,7 @@ Preconditions:
 - **Header entry.** Choose header `AskFred`. Run `browser_click` the link named `AskFred` in the header (`aria-label=AskFred`). URL includes `fred=1`. The panel heading is `AskFred`. The first assistant line is `Hi Davi! Get ready for your meeting.`
 - **Close.** Choose `Close AskFred`. Run `browser_click` the link named `Close AskFred`. URL no longer has `fred`. The dock/sheet is gone.
 - **Sidebar entry.** Choose sidebar `AskFred`. Run `browser_click` the nav link named `AskFred`. URL includes `fred=1` and the panel is back. From `/meetings` this same control goes to `/?fred=1`.
-- **URL entry.** Open `/?fred=1` directly. Run `browser_navigate` to `http://127.0.0.1:18080/?fred=1`. Same panel as header entry.
+- **URL entry.** Open `/?fred=1` directly. Run `browser_navigate` to `{ui_url}/?fred=1`. Same panel as header entry.
 - **Type and send.** The `Ask Fred` field placeholder is `Ask anything here`. Type `what is queued`, then send. Run `browser_fill` on the textbox named `Ask Fred` with `what is queued`, then `browser_click` the button named `Send`. A user bubble with `what is queued` appears, then streamed assistant text (not the old `I can prep from the meetings...` line). A failed stream shows danger text under the chips; a successful send does not.
 - **Chip.** Choose `What's my day looking like?`. Run `browser_click` that button. A user bubble with that chip text appears, then streamed assistant text.
 - **Proof.** `artifacts/ask-fred/open.aria.txt` and `open.png` show the dock, `Hi Davi!`, and `fred=1` in the URL. `artifacts/ask-fred/sent.aria.txt` and `sent.png` show the user bubble and streamed assistant text.
