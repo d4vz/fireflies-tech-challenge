@@ -91,7 +91,7 @@ Stable handles (from the running UI, not CSS):
 | `Open navigation` | button | header, below md |
 | `Transcript` | button | meeting detail, below lg |
 
-Document title is `Meetings`. Sidebar brand is the Fireflies wordmark. Greeting on Home is `Good Morning, Verify`, `Good Afternoon, Verify`, or `Good Evening, Verify` from local time (`Verify` is the launch-created Clerk first name). Unsigned `/` is the custom Google sign-in page (`Continue with Google`). Empty Home copy is `No meetings in this view.` Empty list copy is `No meetings yet. Capture or upload a file to start.` Status chips are `Queued`, `Processing`, `Ready`, `Failed`. Audio rows include sr-only `Audio recording` in the link name.
+Document title is `Meetings`. Sidebar brand is the Fireflies wordmark. Greeting on Home is `Good Morning, Verify`, `Good Afternoon, Verify`, or `Good Evening, Verify` from local time (`Verify` is the launch-created Clerk first name). Unsigned `/` redirects to `/sign-in`, which mounts Clerk's default `<SignIn />`. Empty Home copy is `No meetings in this view.` Empty list copy is `No meetings yet. Capture or upload a file to start.` Status chips are `Queued`, `Processing`, `Ready`, `Failed`. Audio rows include sr-only `Audio recording` in the link name.
 
 The browser talks only to Next `/api/*`. Home and list poll every 2s while any row is queued or processing.
 
