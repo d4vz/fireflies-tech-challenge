@@ -6,7 +6,7 @@ Meeting detail is `/meetings/:id`. It plays the stored media, shows processing s
 
 - `detail-open` shows `meeting.name` as the page `h1` and a status chip.
 - `detail-media` renders stored media. Video uses `<video>` with a thumbnail poster. Audio uses a Mic plus native `<audio controls>`. Both fetch `/api/meetings/<id>/video`.
-- `detail-summary` shows Summary and Tasks, including `(no summary)` when missing.
+- `detail-summary` shows Summary. Queued and processing show a summary skeleton. Ready/failed with no text shows `(no summary)`. Tasks show a skeleton while queued or processing, a checklist when tasks exist, and nothing when the meeting is ready or failed with no tasks.
 - `detail-transcript` shows speaker turns when status is `ready` and turns exist, `(empty transcript)` when there are no turns, and a pending skeleton while status is queued or processing.
 - `detail-missing` shows `meeting not found` for an unknown id.
 
@@ -25,9 +25,9 @@ Preconditions:
 
 - **Open from list.** From `/meetings`, choose the row named the meeting `name`. Run `browser_click` that link. The article `h1` is that `name`. Status is one of `Queued`, `Processing`, `Ready`, `Failed`.
 - **Media.** For `blob.kind` video the page includes a `video` whose `src` is `/api/meetings/<id>/video` and `poster` is `/api/meetings/<id>/thumbnail`. For `blob.kind` audio the page includes `audio` with `controls` and the same `/video` src. There is no `<video>` and no poster. Prove both kinds when both exist in the library.
-- **Summary block.** Headings `Summary` and `Tasks` are visible. Empty summary text is `(no summary)`. There is no `Takeaways` heading and no `Action items` heading.
-- **Transcript dock.** On the right, heading `Transcript` (screen-reader text ` for <name>`). Ready with turns shows each turn as speaker label, `m:ss` start time, and utterance text. Consecutive turns stay separate rows; do not expect joined blob text. Ready/failed with no turns shows `(empty transcript)`. Queued/processing shows the transcript skeleton until status is `Ready` (the dock does not fetch turns while busy).
-- **Speaker-rail proof.** `control-fireflies sample-audio` / `sample-video` are 2s sine tones. Those meetings go `Ready` with `(empty transcript)`. To prove a speaker label, upload spoken audio (for example a `say`-generated mp3) through Capture or the Next upload fallback, wait until `Ready`, then confirm the rail shows a speaker such as `A`. A short clip may be only `A`.
+- **Summary block.** Heading `Summary` is visible. Queued/processing shows a summary skeleton (`aria-label` `Loading summary`), not `(no summary)`. Ready/failed with no text shows `(no summary)`. Queued/processing shows a tasks skeleton (`aria-label` `Loading tasks`). Ready/failed with tasks shows the Tasks card. Ready/failed with no tasks shows no Tasks card and no `No action items` copy. There is no `Takeaways` heading and no `Action items` heading.
+- **Transcript dock.** On the right, heading `Transcript` (screen-reader text ` for <name>`). Ready with turns shows a rounded-square letter avatar, `Speaker 1` / `Speaker 2` (letter ids `A` / `B` from the API), an accent `m:ss` start time, and utterance text. Consecutive turns stay separate rows; do not expect joined blob text. Ready/failed with no turns shows `(empty transcript)`. Queued/processing shows the transcript skeleton until status is `Ready` (the dock does not fetch turns while busy).
+- **Speaker-rail proof.** `control-fireflies sample-audio` / `sample-video` are 2s sine tones. Those meetings go `Ready` with `(empty transcript)`. To prove a speaker label, upload spoken audio (for example a `say`-generated mp3) through Capture or the Next upload fallback, wait until `Ready`, then confirm the rail shows `Speaker 1`. A short clip may be only `Speaker 1`.
 - **Unknown id.** Open `/meetings/missing`. Run `browser_navigate` to `{ui_url}/meetings/missing`. Main copy is `meeting not found`.
 - **Proof.** Save `artifacts/meeting-detail/detail.aria.txt` and `detail.png` with `name`, status, Summary, and at least one speaker label when the meeting has turns. Save `GET <ui_url>/api/meetings/<id>` as `meeting.json`. For a ready meeting also save `GET <ui_url>/api/meetings/<id>/transcripts` as `transcripts.json`. Each item is `{ index, speaker, start, end, text }` with utterance `text` (not `Speaker: …` prefixes).
 

@@ -39,7 +39,7 @@ Preconditions:
 
 ## Gotchas
 
-- Sidebar `Tasks` is a real route. It is not a muted placeholder like Analytics.
+- Sidebar `Tasks` is a real route. The sidebar has no Coming soon items.
 - Home's large mobile number is pending only. Desktop body is `N pending · M completed`. Snapshot at 1440px to read the full body.
 - `/tasks` paginates by meeting group, not by individual task. Page size is 10 groups.
 - Meeting detail and the library page both use the heading `Tasks`.
