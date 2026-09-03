@@ -6,7 +6,7 @@ Home is `/`. After Clerk sign-in it greets the session first name (`Verify` on a
 
 - `home-load` renders the greeting, workspace name, and three insight cards after meetings fetch (`Meetings`, `In progress`, `Tasks`). Busy meetings raise the In progress count. There is no fourth card titled with a meeting `sourceId`.
 - `home-empty` shows capture-or-upload copy when no rows match. `Last meetings` and `view more` stay on the page.
-- `home-preview` shows at most three meetings in a two-column grid on desktop and one column on mobile. Queued and processing rows show a summary skeleton (`aria-label` `Loading summary`), not empty summary copy.
+- `home-preview` shows at most two meetings in a two-column grid on desktop and one column on mobile. Queued and processing rows show a summary skeleton (`aria-label` `Loading summary`), not empty summary copy.
 - `home-more` opens `/meetings` from `view more` beside `Last meetings`.
 
 ## How to get to it (user POV)
@@ -35,4 +35,4 @@ Preconditions:
 - Home stays on a skeleton until both the meetings fetch and a client clock tick finish. Wait for the greeting, not a fixed sleep.
 - Insight cards stay three (`Meetings`, `In progress`, `Tasks`). A busy library does not add a fourth card titled with `sourceId`.
 - A failed fetch shows `could not load meetings` in danger text. That is not empty-library proof. Re-run doctor.
-- Home shows at most three meetings. A fourth library row is only on `/meetings`.
+- Home shows at most two meetings. A third library row is only on `/meetings`.
