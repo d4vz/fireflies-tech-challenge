@@ -47,7 +47,17 @@ git submodule update --init --recursive
 
 ## Run
 
-You need [Docker](https://docs.docker.com/get-docker/), an [OpenAI](https://platform.openai.com) API key, an [AssemblyAI](https://www.assemblyai.com) API key, and a [Clerk](https://clerk.com) application. Use the same Clerk app in both services.
+You need [Docker](https://docs.docker.com/get-docker/), an [OpenAI](https://platform.openai.com) API key, an [AssemblyAI](https://www.assemblyai.com) API key, and a [Clerk](https://clerk.com) application. Use the same Clerk app in both services. Clerk shows the publishable key and the secret key when you create the application.
+
+Give Docker enough RAM and CPUs. MongoDB Atlas Local and Next.js do not fit in a 2 GB VM. The Next.js compile can spike above the usual memory use. If that happens, or if `web` exits while `Compiling /`, raise or remove the Docker VM limits so the stack can use the host resources.
+
+Colima:
+
+```
+colima start --cpu 4 --memory 8
+```
+
+Docker Desktop: Settings → Resources. Move Memory and CPUs up, or match the host.
 
 The parent `docker-compose.yml` includes [backend/docker-compose.yml](backend/docker-compose.yml) and [frontend/docker-compose.yml](frontend/docker-compose.yml). One `.env` in this directory is enough.
 
