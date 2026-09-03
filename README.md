@@ -26,9 +26,7 @@ I built this project AI-first. The agent workflow is [pstack](https://github.com
 
 ### Models
 
-Transcription uses [AssemblyAI](https://www.assemblyai.com) with speaker labels. The name in the backend [config.yaml](https://github.com/d4vz/fireflies-tech-challenge-backend/blob/main/config.yaml) is `assemblyai`. Summaries and embeddings still use [OpenAI](https://platform.openai.com). I tried OpenAI `gpt-4o-transcribe-diarize` first so one API key would cover speech-to-text too. A 5-minute clip took 133 seconds. A 10-minute clip was still running after 15 minutes, then failed. AssemblyAI transcribed that same 10-minute file in 15 seconds, at least 60 times faster, with speaker labels on the whole file. A 5-minute file took 13 seconds.
-
-While a meeting is queued or processing, the UI shows skeletons for the summary and tasks instead of empty copy.
+Transcription uses [AssemblyAI](https://www.assemblyai.com) with speaker labels. The name in the backend [config.yaml](https://github.com/d4vz/fireflies-tech-challenge-backend/blob/main/config.yaml) is `assemblyai`. Summaries and embeddings still use [OpenAI](https://platform.openai.com). I tried OpenAI `gpt-4o-transcribe-diarize` first so one API key would cover speech-to-text too. AssemblyAI was faster and more reliable, and it labeled speakers on the whole file.
 
 If you want something cheaper or local-first, those jobs could also run on [whisper.cpp](https://github.com/ggml-org/whisper.cpp) for speech-to-text, [Voyage](https://docs.voyageai.com/docs/embeddings) or a similar embedding model, and any other provider for summaries. That is not wired up today.
 
