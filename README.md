@@ -85,11 +85,15 @@ docker compose up --build
 
 The first run is slow: it pulls MongoDB Atlas Local. Later starts can omit `--build` unless app code changed.
 
-Open `http://localhost:8080`. Clerk's development handshake hangs on `127.0.0.1`, so stay on `localhost`. The API listens on `http://localhost:3000`. Next.js talks to Hono on the Compose network (`http://api:3000`). The browser does not.
+Open `http://localhost:8080`. API listens on `http://localhost:3000`.
+
+---
+
+> [!NOTE]
+> I tested this stack on a few machines, but you may still hit a problem on yours. If you have any issue or question while running it, email me: [daviorlandi.floripa@gmail.com](mailto:daviorlandi.floripa@gmail.com)
 
 ## Next steps
 
 - A meeting bot that joins a live call and records it, either with [Playwright](https://playwright.dev) or an API such as [Recall.ai](https://www.recall.ai).
 - [Google Calendar](https://developers.google.com/calendar) so upcoming meetings can be scheduled and captured from the calendar.
 - Semantic search across all of a user's meetings, including summaries, not only meeting-scoped transcript search.
-
