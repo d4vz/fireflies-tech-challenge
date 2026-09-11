@@ -1,0 +1,22 @@
+{
+  "name": "Fireflies Clone",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "api",
+      "command": "export PATH=\"$HOME/.bun/bin:$PATH\"; cd backend && bun run dev",
+      "description": "Hono API on http://localhost:3000. Needs OPENAI_API_KEY, ASSEMBLYAI_API_KEY, and CLERK_SECRET_KEY as secrets to boot."
+    },
+    {
+      "name": "web",
+      "command": "export PATH=\"$HOME/.bun/bin:$PATH\"; cd frontend && bun run dev",
+      "description": "Next.js UI on http://localhost:8080. Needs NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY as secrets for auth."
+    }
+  ],
+  "ports": [
+    { "name": "web", "port": 8080 },
+    { "name": "api", "port": 3000 },
+    { "name": "minio-console", "port": 9001 }
+  ]
+}
