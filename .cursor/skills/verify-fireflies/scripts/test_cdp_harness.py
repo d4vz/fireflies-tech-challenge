@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -18,11 +18,12 @@ PROBE_HTML = (
 
 
 def load_control():
-    spec = importlib.util.spec_from_file_location("control_fireflies", CONTROL)
-    if spec is None or spec.loader is None:
+    loader = importlib.machinery.SourceFileLoader("control_fireflies", str(CONTROL))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    if spec is None:
         raise SystemExit(f"cannot load {CONTROL}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    loader.exec_module(module)
     return module
 
 
