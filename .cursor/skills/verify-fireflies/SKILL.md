@@ -38,6 +38,8 @@ Secrets come from, in this order, then process env (env wins): parent `.env`, `b
 
 Launch copies Clerk keys into the Next process. Missing `frontend/node_modules` or `backend/node_modules` triggers `bun install` in that directory. Bun may live at `~/.bun/bin/bun`.
 
+If `docker pull minio/minio:latest` is denied (common on Docker Hub), launch pulls `quay.io/minio/minio:latest` and tags it as `minio/minio:latest`. That tag is local only.
+
 Launch refuses 8080 and 3000. If 18080 or 13000 is busy, stop, or set `FIREFLIES_UI_PORT` / `FIREFLIES_API_PORT`. If `.run/instance.json` still names live pids, run cleanup first. Next.js will not run two `next dev` servers against the same `distDir`. Launch sets `NEXT_DIST_DIR=.next-verify` so it can sit beside a session on 8080. `frontend/next.config.mjs` must keep `distDir: process.env.NEXT_DIST_DIR || ".next"`.
 
 Two verification stacks at once are not supported. Docker volumes `mongo-db`, `minio-data`, and Redis on 6379 are shared infra. Isolation is the verify database, Redis DB, and bucket, not a second compose project. MongoDB Atlas Local is the compose `mongodb` image; first pull is large.

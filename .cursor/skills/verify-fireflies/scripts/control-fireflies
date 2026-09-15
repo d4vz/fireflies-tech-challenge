@@ -364,14 +364,38 @@ def compose_running() -> bool:
     return {"mongodb", "redis", "minio"}.issubset(services)
 
 
+def docker_image_exists(name: str) -> bool:
+    try:
+        subprocess.check_call(
+            [*docker_cmd(), "image", "inspect", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        return False
+    return True
+
+
+def ensure_minio_image() -> None:
+    if docker_image_exists("minio/minio:latest"):
+        return
+    say("docker hub denied minio/minio; pulling quay.io/minio/minio:latest and tagging")
+    subprocess.check_call([*docker_cmd(), "pull", "quay.io/minio/minio:latest"])
+    subprocess.check_call([*docker_cmd(), "tag", "quay.io/minio/minio:latest", "minio/minio:latest"])
+
+
 def ensure_compose() -> bool:
     if compose_running():
         return False
+    ensure_minio_image()
     say("starting docker compose (mongodb, redis, minio)")
-    subprocess.check_call(
-        [*docker_cmd(), "compose", "-f", str(COMPOSE_FILE), "up", "-d", "mongodb", "redis", "minio"],
-        cwd=BACKEND_DIR,
-    )
+    try:
+        subprocess.check_call(
+            [*docker_cmd(), "compose", "-f", str(COMPOSE_FILE), "up", "-d", "mongodb", "redis", "minio"],
+            cwd=BACKEND_DIR,
+        )
+    except subprocess.CalledProcessError as error:
+        die(f"docker compose up failed ({error.returncode})")
     deadline = time.time() + 180
     while time.time() < deadline:
         if compose_running():
@@ -829,7 +853,7 @@ def cmd_snapshot() -> None:
     aria = dest / "shot.aria.txt"
     profile = RUN_DIR / "chrome-profile"
     profile.mkdir(parents=True, exist_ok=True)
-    cmd = [
+    common = [
         chrome,
         "--headless=new",
         "--disable-gpu",
@@ -837,16 +861,32 @@ def cmd_snapshot() -> None:
         "--disable-dev-shm-usage",
         "--window-size=1440,900",
         f"--user-data-dir={profile}",
-        f"--screenshot={shot}",
-        "--dump-dom",
-        "--virtual-time-budget=25000",
-        start_url,
     ]
     say(f"snapshot feature={feature} url={start_url}")
-    completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
-    aria.write_text(completed.stdout)
+    try:
+        subprocess.run(
+            [*common, f"--screenshot={shot}", start_url],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=40,
+        )
+    except subprocess.TimeoutExpired:
+        die("chrome screenshot timed out")
     if not shot.is_file():
         die(f"chrome did not write {shot}")
+    try:
+        dumped = subprocess.run(
+            [*common, "--dump-dom", start_url],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        aria.write_text(dumped.stdout)
+    except subprocess.TimeoutExpired:
+        aria.write_text("chrome dump-dom timed out; screenshot kept\n")
+        say("dump-dom timed out; screenshot kept")
     print(f"shot={shot}")
     print(f"aria={aria}")
 
