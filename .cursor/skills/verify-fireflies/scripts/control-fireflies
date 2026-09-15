@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -25,6 +27,7 @@ REQUIRED_SECRETS = (
     "S3_BUCKET",
     "REDIS_URL",
     "CLERK_SECRET_KEY",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
 )
 
 # Local compose values from backend/docker-compose.yml. Used only when the
@@ -56,8 +59,8 @@ BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 COMPOSE_FILE = BACKEND_DIR / "docker-compose.yml"
 
-DEFAULT_UI_PORT = 18080
-DEFAULT_API_PORT = 13000
+DEFAULT_UI_PORT = 8080
+DEFAULT_API_PORT = 3000
 VERIFY_MONGO_DB = "fireflies_verify"
 VERIFY_S3_BUCKET = "fireflies-verify"
 VERIFY_REDIS_DB = "15"
@@ -89,33 +92,38 @@ def load_dotenv(path: Path) -> dict[str, str]:
     return env
 
 
-def secrets_path() -> Path:
+def secret_files() -> list[Path]:
+    files = [
+        REPO_ROOT / ".env",
+        BACKEND_DIR / ".env",
+        BACKEND_DIR / ".env.local",
+        FRONTEND_DIR / ".env.local",
+    ]
     override = os.environ.get("FIREFLIES_VERIFY_ENV")
     if override:
-        return Path(override)
-    env_file = BACKEND_DIR / ".env"
-    if env_file.is_file():
-        return env_file
-    return BACKEND_DIR / ".env.local"
+        files.append(Path(override))
+    return files
 
 
 def load_secrets() -> dict[str, str]:
-    path = secrets_path()
-    if not path.is_file():
-        die(
-            f"missing secrets file {path}. Put backend/.env or backend/.env.local "
-            "in place, or set FIREFLIES_VERIFY_ENV to a file with OPENAI_API_KEY, "
-            "ASSEMBLYAI_API_KEY, MONGODB_URI, REDIS_URL, CLERK_SECRET_KEY, and the S3_* keys. "
-            "Do not print those values."
-        )
-    merged = dict(os.environ)
-    merged.update(load_dotenv(path))
+    merged: dict[str, str] = {}
+    for path in secret_files():
+        if path.is_file():
+            merged.update(load_dotenv(path))
+    for key, value in os.environ.items():
+        if value.strip() != "":
+            merged[key] = value
     for key, value in COMPOSE_SECRET_DEFAULTS.items():
         if merged.get(key, "").strip() == "":
             merged[key] = value
     missing = [key for key in REQUIRED_SECRETS if merged.get(key, "").strip() == ""]
     if missing:
-        die(f"secrets file {path} is missing {', '.join(missing)}")
+        die(
+            "missing "
+            + ", ".join(missing)
+            + ". Put them in backend/.env, frontend/.env.local, the process env, "
+            "or FIREFLIES_VERIFY_ENV. Do not print those values."
+        )
     return merged
 
 
@@ -245,7 +253,12 @@ def http_get(
         return 0, str(error)
 
 
-def clerk_request(secret_key: str, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+def clerk_try(
+    secret_key: str,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+) -> tuple[int, dict[str, Any]]:
     payload = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(
         f"{CLERK_API}{path}",
@@ -261,20 +274,104 @@ def clerk_request(secret_key: str, method: str, path: str, body: dict[str, Any] 
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
             raw = response.read().decode("utf-8", errors="replace")
+            status = response.status
     except urllib.error.HTTPError as error:
+        raw = error.read().decode("utf-8", errors="replace")
+        status = error.code
         if method == "DELETE":
-            return {}
-        die(f"Clerk {method} {path} -> {error.code}")
+            return status, {}
     if raw == "":
-        return {}
-    parsed = json.loads(raw)
+        return status, {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return status, {}
     if not isinstance(parsed, dict):
-        die(f"Clerk {method} {path} returned a non-object")
+        return status, {}
+    return status, parsed
+
+
+def clerk_request(secret_key: str, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    status, parsed = clerk_try(secret_key, method, path, body)
+    if method == "DELETE":
+        return parsed
+    if status >= 400:
+        die(f"Clerk {method} {path} -> {status}")
     return parsed
 
 
+def clerk_frontend_api_host(publishable_key: str) -> str:
+    if not publishable_key.startswith(("pk_test_", "pk_live_")):
+        return ""
+    raw = publishable_key.split("_", 2)[2]
+    pad = "=" * ((4 - len(raw) % 4) % 4)
+    try:
+        decoded = base64.b64decode(raw + pad).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    return decoded.split("$")[0].strip()
+
+
+def require_live_clerk(secrets: dict[str, str]) -> None:
+    host = clerk_frontend_api_host(secrets["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"])
+    if host == "" or host.startswith("dummy.") or "example" in host or "placeholder" in host:
+        die(
+            "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is not a live Clerk instance "
+            f"(frontend API host {host or 'unreadable'}). "
+            "Set the publishable key and CLERK_SECRET_KEY from the same Clerk app, "
+            "and allow localhost."
+        )
+    status, _ = clerk_try(secrets["CLERK_SECRET_KEY"], "GET", "/users?limit=1")
+    if status == 401:
+        die(
+            "CLERK_SECRET_KEY was rejected (401). "
+            "Use the secret key from the same Clerk app as the publishable key."
+        )
+    if status >= 400:
+        die(f"Clerk GET /users -> {status}")
+
+
+def mint_browser_login(secret_key: str, user_id: str, ui_url: str) -> dict[str, str]:
+    if user_id == "":
+        die("browser login needs clerk_user_id from launch")
+    testing_status, testing_body = clerk_try(secret_key, "POST", "/testing_tokens", {})
+    testing_token = str(testing_body.get("token", "")) if testing_status in (200, 201) else ""
+    ticket_status, ticket_body = clerk_try(
+        secret_key,
+        "POST",
+        "/sign_in_tokens",
+        {"user_id": user_id},
+    )
+    if ticket_status not in (200, 201):
+        die(f"Clerk POST /sign_in_tokens -> {ticket_status}")
+    ticket = str(ticket_body.get("token", ""))
+    ticket_url = str(ticket_body.get("url", ""))
+    if ticket == "":
+        die("Clerk sign-in token did not return a ticket")
+    agent_status, agent_body = clerk_try(
+        secret_key,
+        "POST",
+        "/agents/tasks",
+        {
+            "on_behalf_of": {"user_id": user_id},
+            "permissions": "*",
+            "agent_name": "verify-fireflies",
+            "task_description": "open the signed-in app",
+            "redirect_url": f"{ui_url}/",
+        },
+    )
+    agent_url = str(agent_body.get("url", "")) if agent_status in (200, 201) else ""
+    login_url = agent_url or ticket_url or f"{ui_url}/sign-in"
+    return {
+        "ticket": ticket,
+        "testing_token": testing_token,
+        "login_url": login_url,
+    }
+
+
 def create_clerk_verify_session(secret_key: str, redirect_url: str) -> dict[str, str]:
-    email = f"verify-{int(time.time())}@example.com"
+    del redirect_url
+    email = f"verify-{int(time.time())}+clerk_test@example.com"
     user_id = ""
     try:
         user = clerk_request(
@@ -298,25 +395,9 @@ def create_clerk_verify_session(secret_key: str, redirect_url: str) -> dict[str,
         jwt = str(token.get("jwt", ""))
         if jwt == "":
             die("Clerk session token did not return a jwt")
-        task = clerk_request(
-            secret_key,
-            "POST",
-            "/agents/tasks",
-            {
-                "on_behalf_of": {"user_id": user_id},
-                "permissions": "*",
-                "agent_name": "verify-fireflies",
-                "task_description": "open the signed-in app",
-                "redirect_url": redirect_url,
-            },
-        )
-        agent_url = str(task.get("url", ""))
-        if agent_url == "":
-            die("Clerk agent task did not return a url")
         return {
             "user_id": user_id,
             "jwt": jwt,
-            "agent_url": agent_url,
             "display_name": VERIFY_DISPLAY_NAME,
         }
     except BaseException:
@@ -344,10 +425,47 @@ def wait_http(url: str, timeout: float, ok: tuple[int, ...] = (200,)) -> tuple[i
     return last_status, last_body
 
 
+def parse_health(body: str) -> dict[str, str]:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return {"status": "unreadable", "blob": "unreadable", "transcribe": "unreadable"}
+    if not isinstance(payload, dict):
+        return {"status": "unreadable", "blob": "unreadable", "transcribe": "unreadable"}
+    services = payload.get("services")
+    if not isinstance(services, dict):
+        return {
+            "status": str(payload.get("status", "unreadable")),
+            "blob": "unreadable",
+            "transcribe": "unreadable",
+        }
+    return {
+        "status": str(payload.get("status", "error")),
+        "blob": str(services.get("blob", "missing")),
+        "transcribe": str(services.get("transcribe", "missing")),
+    }
+
+
+def wait_health(url: str, pid: int, timeout: float) -> tuple[int, str]:
+    deadline = time.time() + timeout
+    last_status = 0
+    last_body = ""
+    while time.time() < deadline:
+        if pid > 0 and not pid_alive(pid):
+            die(f"API pid {pid} exited while waiting for {url}")
+        last_status, last_body = http_get(url, timeout=8)
+        health = parse_health(last_body)
+        if last_status in (200, 503) and health["blob"] == "ok":
+            return last_status, last_body
+        time.sleep(0.5)
+    die(f"timed out waiting for {url} blob=ok (last status {last_status})")
+    return last_status, last_body
+
+
 def compose_running() -> bool:
     try:
         out = subprocess.check_output(
-            ["docker", "compose", "-f", str(COMPOSE_FILE), "ps", "--status", "running", "--services"],
+            [*docker_cmd(), "compose", "-f", str(COMPOSE_FILE), "ps", "--status", "running", "--services"],
             cwd=BACKEND_DIR,
             text=True,
             stderr=subprocess.DEVNULL,
@@ -358,15 +476,39 @@ def compose_running() -> bool:
     return {"mongodb", "redis", "minio"}.issubset(services)
 
 
+def docker_image_exists(name: str) -> bool:
+    try:
+        subprocess.check_call(
+            [*docker_cmd(), "image", "inspect", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        return False
+    return True
+
+
+def ensure_minio_image() -> None:
+    if docker_image_exists("minio/minio:latest"):
+        return
+    say("docker hub denied minio/minio; pulling quay.io/minio/minio:latest and tagging")
+    subprocess.check_call([*docker_cmd(), "pull", "quay.io/minio/minio:latest"])
+    subprocess.check_call([*docker_cmd(), "tag", "quay.io/minio/minio:latest", "minio/minio:latest"])
+
+
 def ensure_compose() -> bool:
     if compose_running():
         return False
+    ensure_minio_image()
     say("starting docker compose (mongodb, redis, minio)")
-    subprocess.check_call(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d", "mongodb", "redis", "minio"],
-        cwd=BACKEND_DIR,
-    )
-    deadline = time.time() + 90
+    try:
+        subprocess.check_call(
+            [*docker_cmd(), "compose", "-f", str(COMPOSE_FILE), "up", "-d", "mongodb", "redis", "minio"],
+            cwd=BACKEND_DIR,
+        )
+    except subprocess.CalledProcessError as error:
+        die(f"docker compose up failed ({error.returncode})")
+    deadline = time.time() + 180
     while time.time() < deadline:
         if compose_running():
             return True
@@ -377,7 +519,7 @@ def ensure_compose() -> bool:
 
 def stop_compose() -> None:
     subprocess.check_call(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "stop", "mongodb", "redis", "minio"],
+        [*docker_cmd(), "compose", "-f", str(COMPOSE_FILE), "stop", "mongodb", "redis", "minio"],
         cwd=BACKEND_DIR,
     )
 
@@ -426,7 +568,7 @@ def drop_scratch(env: dict[str, str]) -> None:
     try:
         subprocess.run(
             [
-                "docker",
+                *docker_cmd(),
                 "compose",
                 "-f",
                 str(COMPOSE_FILE),
@@ -450,7 +592,7 @@ def drop_scratch(env: dict[str, str]) -> None:
     try:
         subprocess.run(
             [
-                "docker",
+                *docker_cmd(),
                 "compose",
                 "-f",
                 str(COMPOSE_FILE),
@@ -473,10 +615,254 @@ def drop_scratch(env: dict[str, str]) -> None:
 
 
 def bun_bin() -> str:
-    found = subprocess.check_output(["which", "bun"], text=True).strip()
+    home_bun = Path.home() / ".bun/bin/bun"
+    candidates = [
+        os.environ.get("BUN_INSTALL", "") and str(Path(os.environ["BUN_INSTALL"]) / "bin/bun"),
+        str(home_bun),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    try:
+        found = subprocess.check_output(["which", "bun"], text=True).strip()
+    except subprocess.CalledProcessError:
+        found = ""
     if found == "":
-        die("bun is not on PATH")
+        die("bun is not on PATH. Install bun or put it at ~/.bun/bin/bun")
     return found
+
+
+def docker_cmd() -> list[str]:
+    sock = Path("/var/run/docker.sock")
+    if sock.exists() and os.access(sock, os.W_OK):
+        return ["docker"]
+    return ["sudo", "-n", "docker"]
+
+
+def chrome_bin() -> str:
+    for candidate in (
+        os.environ.get("CHROME_BIN", ""),
+        "/usr/local/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+    ):
+        if candidate and Path(candidate).is_file():
+            return candidate
+    die("google-chrome is not installed; needed for CDP browser-test")
+    return ""
+
+
+def node_bin() -> str:
+    found = shutil.which("node")
+    if not found:
+        die("node is not on PATH; needed for CDP capture")
+    return found
+
+
+class CdpChrome:
+    """One Chrome process with --remote-debugging-port for cdp-capture.mjs."""
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen[bytes] | None = None
+        self.profile: Path | None = None
+        self.cdp_base = ""
+        self.log_path = RUN_DIR / "chrome-cdp.log"
+
+    def __enter__(self) -> CdpChrome:
+        self.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop()
+
+    def start(self) -> None:
+        RUN_DIR.mkdir(parents=True, exist_ok=True)
+        self.profile = RUN_DIR / f"chrome-cdp-{os.getpid()}-{time.time_ns()}"
+        self.profile.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("w") as log:
+            self.proc = subprocess.Popen(
+                [
+                    chrome_bin(),
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--remote-debugging-port=0",
+                    "--remote-debugging-address=127.0.0.1",
+                    "--remote-allow-origins=*",
+                    f"--user-data-dir={self.profile}",
+                    "--window-size=1440,900",
+                    "about:blank",
+                ],
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+            )
+        time.sleep(0.2)
+        if self.proc.poll() is not None:
+            die(f"chrome exited {self.proc.returncode}; see {self.log_path}")
+        port = self._wait_port()
+        self.cdp_base = f"http://127.0.0.1:{port}"
+        say(f"cdp {self.cdp_base}")
+
+    def _wait_port(self, timeout: float = 12) -> int:
+        assert self.profile is not None
+        marker = self.profile / "DevToolsActivePort"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.proc is not None and self.proc.poll() is not None:
+                die(f"chrome exited {self.proc.returncode} before CDP listen; see {self.log_path}")
+            if marker.is_file():
+                first = marker.read_text().splitlines()[0].strip()
+                if first.isdigit():
+                    port = int(first)
+                    try:
+                        with urllib.request.urlopen(
+                            f"http://127.0.0.1:{port}/json/version",
+                            timeout=1,
+                        ) as res:
+                            if res.status == 200:
+                                return port
+                    except OSError:
+                        pass
+            time.sleep(0.1)
+        die(f"Chrome CDP port did not come up; see {self.log_path}")
+        return 0
+
+    def stop(self) -> None:
+        if self.proc is None:
+            return
+        pid = self.proc.pid
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except OSError:
+            try:
+                self.proc.terminate()
+            except OSError:
+                pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        self.proc = None
+
+    def capture(
+        self,
+        url: str,
+        shot: Path,
+        html: Path | None = None,
+        aria: Path | None = None,
+    ) -> None:
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            node_bin(),
+            str(SCRIPT_DIR / "cdp-capture.mjs"),
+            "--cdp",
+            self.cdp_base,
+            "--url",
+            url,
+            "--shot",
+            str(shot),
+        ]
+        if html is not None:
+            cmd.extend(["--html", str(html)])
+        if aria is not None:
+            cmd.extend(["--aria", str(aria)])
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=40,
+            )
+        except subprocess.TimeoutExpired:
+            die(f"CDP capture timed out for {url}")
+        except subprocess.CalledProcessError as err:
+            detail = (err.stderr or err.stdout or "").strip()
+            if detail != "":
+                print(detail, file=sys.stderr)
+            die(f"CDP capture failed for {url}")
+        if not shot.is_file() or shot.stat().st_size < 32:
+            die(f"CDP did not write a screenshot for {url}")
+
+    def drive(
+        self,
+        steps: list[dict[str, Any]],
+        ticket: str = "",
+        testing_token: str = "",
+        origin: str = "",
+        login_url: str = "",
+    ) -> None:
+        plan_path = RUN_DIR / "cdp-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "cdp": self.cdp_base,
+                    "ticket": ticket,
+                    "testingToken": testing_token,
+                    "origin": origin,
+                    "loginUrl": login_url,
+                    "steps": steps,
+                }
+            )
+        )
+        try:
+            subprocess.run(
+                [
+                    node_bin(),
+                    str(SCRIPT_DIR / "cdp-capture.mjs"),
+                    "--plan",
+                    str(plan_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            die("CDP plan timed out")
+        except subprocess.CalledProcessError as err:
+            detail = (err.stderr or err.stdout or "").strip()
+            if detail != "":
+                print(detail, file=sys.stderr)
+            die("CDP plan failed")
+        finally:
+            plan_path.unlink(missing_ok=True)
+
+
+def chrome_capture(
+    url: str,
+    shot: Path,
+    html: Path | None = None,
+    aria: Path | None = None,
+    session: CdpChrome | None = None,
+) -> None:
+    if session is not None:
+        session.capture(url, shot, html, aria)
+        return
+    with CdpChrome() as cdp:
+        cdp.capture(url, shot, html, aria)
+
+
+def capture_step(shot: Path, html: Path, aria: Path) -> dict[str, Any]:
+    shot.parent.mkdir(parents=True, exist_ok=True)
+    return {
+        "action": "capture",
+        "shot": str(shot),
+        "html": str(html),
+        "aria": str(aria),
+    }
 
 
 def cmd_launch() -> None:
@@ -492,19 +878,20 @@ def cmd_launch() -> None:
 
     ui_port = port_from_env("FIREFLIES_UI_PORT", DEFAULT_UI_PORT)
     api_port = port_from_env("FIREFLIES_API_PORT", DEFAULT_API_PORT)
-    if ui_port == 8080 or api_port == 3000:
-        die("refusing ports 8080 and 3000; those belong to a normal local session")
     if not port_is_free(ui_port):
         die(f"UI port {ui_port} is already in use")
     if not port_is_free(api_port):
         die(f"API port {api_port} is already in use")
 
     secrets = load_secrets()
+    require_live_clerk(secrets)
     bun = bun_bin()
     if not (FRONTEND_DIR / "node_modules").is_dir():
-        die("frontend/node_modules is missing. Run bun install in frontend/")
+        say("bun install in frontend/")
+        subprocess.check_call([bun, "install"], cwd=FRONTEND_DIR)
     if not (BACKEND_DIR / "node_modules").is_dir():
-        die("backend/node_modules is missing. Run bun install in backend/")
+        say("bun install in backend/")
+        subprocess.check_call([bun, "install"], cwd=BACKEND_DIR)
     next_bin = FRONTEND_DIR / "node_modules/next/dist/bin/next"
     if not next_bin.is_file():
         die(f"missing {next_bin}. Run bun install in frontend/")
@@ -520,7 +907,10 @@ def cmd_launch() -> None:
     ui_env = dict(os.environ)
     ui_env["API_URL"] = f"http://127.0.0.1:{api_port}"
     ui_env["PORT"] = str(ui_port)
-    ui_env["NEXT_DIST_DIR"] = ".next-verify"
+    if ui_port != 8080:
+        ui_env["NEXT_DIST_DIR"] = ".next-verify"
+    ui_env["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"] = secrets["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"]
+    ui_env["CLERK_SECRET_KEY"] = secrets["CLERK_SECRET_KEY"]
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     RUN_DIR.mkdir(parents=True, exist_ok=True)
@@ -541,7 +931,7 @@ def cmd_launch() -> None:
             api_env,
             api_log,
         )
-        wait_http(f"http://127.0.0.1:{api_port}/health", timeout=60)
+        wait_health(f"http://127.0.0.1:{api_port}/health", api_pid, timeout=90)
         say(f"starting UI on {ui_port}")
         ui_pid = start_logged(
             [bun, str(next_bin), "dev", "-p", str(ui_port), "--hostname", "localhost"],
@@ -554,11 +944,16 @@ def cmd_launch() -> None:
             die(f"UI exited. See {ui_log}")
         ui_url = f"http://localhost:{ui_port}"
         wait_http(f"{ui_url}/sign-in", timeout=90)
+        clerk_user_id = ""
+        display_name = VERIFY_DISPLAY_NAME
+        session_state = "missing"
         say("creating Clerk verify session")
         session = create_clerk_verify_session(secrets["CLERK_SECRET_KEY"], f"{ui_url}/")
         clerk_user_id = session["user_id"]
         SESSION_JWT_PATH.write_text(session["jwt"])
-        AGENT_TASK_PATH.write_text(session["agent_url"])
+        AGENT_TASK_PATH.unlink(missing_ok=True)
+        display_name = session["display_name"]
+        session_state = "ready"
         write_instance(
             {
                 "ui_pid": ui_pid,
@@ -567,12 +962,15 @@ def cmd_launch() -> None:
                 "api_port": api_port,
                 "ui_url": ui_url,
                 "api_url": f"http://127.0.0.1:{api_port}",
+                "health_url": f"http://127.0.0.1:{api_port}/health",
+                "sign_in_url": f"{ui_url}/sign-in",
                 "started_compose": started_compose,
                 "mongo_db": VERIFY_MONGO_DB,
                 "s3_bucket": VERIFY_S3_BUCKET,
                 "redis_db": int(VERIFY_REDIS_DB),
                 "clerk_user_id": clerk_user_id,
-                "display_name": session["display_name"],
+                "display_name": display_name,
+                "session": session_state,
             }
         )
         instance_written = True
@@ -588,7 +986,10 @@ def cmd_launch() -> None:
                 stop_compose()
 
     say(f"ready UI={ui_port} API={api_port} pids ui={ui_pid} api={api_pid}")
-    say(f"display_name={VERIFY_DISPLAY_NAME} session=ready")
+    say(f"ui_url=http://localhost:{ui_port}")
+    say(f"health_url=http://127.0.0.1:{api_port}/health")
+    say(f"sign_in_url=http://localhost:{ui_port}/sign-in")
+    say(f"display_name={VERIFY_DISPLAY_NAME} session={session_state}")
 
 
 def cmd_doctor() -> None:
@@ -601,8 +1002,6 @@ def cmd_doctor() -> None:
     api_url = str(instance["api_url"])
     problems: list[str] = []
 
-    if ui_port == 8080 or api_port == 3000:
-        problems.append("instance is on the shared 8080/3000 session ports")
     if not pid_alive(ui_pid):
         problems.append(f"UI pid {ui_pid} is dead")
     if not pid_alive(api_pid):
@@ -615,12 +1014,13 @@ def cmd_doctor() -> None:
         problems.append(f"API pid {api_pid} does not own port {api_port} (owners {api_listeners})")
 
     health_status, health_body = http_get(f"{api_url}/health", timeout=15)
-    if health_status != 200:
+    health = parse_health(health_body)
+    if health_status not in (200, 503):
         problems.append(f"GET {api_url}/health -> {health_status}")
-    elif '"status":"ok"' not in health_body.replace(" ", ""):
-        problems.append(f"API health is not ok: {health_body[:200]}")
+    elif health["blob"] != "ok":
+        problems.append(f"API blob is not ok: {health_body[:200]}")
 
-    sign_in_status, _ = http_get(f"{ui_url}/sign-in", timeout=15)
+    sign_in_status, sign_in_body = http_get(f"{ui_url}/sign-in", timeout=15)
     if sign_in_status != 200:
         problems.append(f"GET {ui_url}/sign-in -> {sign_in_status}")
 
@@ -633,29 +1033,34 @@ def cmd_doctor() -> None:
         problems.append(f"GET {ui_url}/api/meetings without session -> {unsigned_meetings}")
 
     jwt = SESSION_JWT_PATH.read_text().strip() if SESSION_JWT_PATH.is_file() else ""
-    if jwt == "":
-        problems.append("missing Clerk session jwt; re-run launch")
-        meetings_status = 0
-        meetings_body = ""
-    else:
+    session_state = "ready" if jwt != "" else "missing"
+    meetings_status = 0
+    meetings_body = ""
+    if jwt != "":
         meetings_status, meetings_body = http_get(
             f"{api_url}/meetings?page=1&limit=5",
             timeout=15,
             headers={"Authorization": f"Bearer {jwt}"},
         )
-    if meetings_status != 200:
-        problems.append(f"GET {api_url}/meetings with Bearer -> {meetings_status}")
-    else:
-        try:
-            payload = json.loads(meetings_body)
-        except json.JSONDecodeError:
-            problems.append("meetings proxy did not return JSON")
-            payload = None
-        if isinstance(payload, dict) and "items" not in payload:
-            problems.append("meetings proxy JSON has no items")
+        if meetings_status != 200:
+            problems.append(f"GET {api_url}/meetings with Bearer -> {meetings_status}")
+        else:
+            try:
+                payload = json.loads(meetings_body)
+            except json.JSONDecodeError:
+                problems.append("meetings API did not return JSON")
+                payload = None
+            if isinstance(payload, dict) and "items" not in payload:
+                problems.append("meetings API JSON has no items")
+    if session_state != "ready":
+        problems.append("session=missing; launch needs live Clerk keys")
+    if str(instance.get("clerk_user_id", "")).strip() == "":
+        problems.append("clerk_user_id is empty")
 
     print(f"ui_url={ui_url}")
     print(f"api_url={api_url}")
+    print(f"health_url={api_url}/health")
+    print(f"sign_in_url={ui_url}/sign-in")
     print(f"ui_pid={ui_pid}")
     print(f"api_pid={api_pid}")
     print(f"mongo_db={instance.get('mongo_db')}")
@@ -663,7 +1068,10 @@ def cmd_doctor() -> None:
     print(f"redis_db={instance.get('redis_db')}")
     print(f"started_compose={instance.get('started_compose')}")
     print(f"display_name={instance.get('display_name')}")
-    print("session=ready" if SESSION_JWT_PATH.is_file() else "session=missing")
+    print(f"health_http={health_status}")
+    print(f"blob={health['blob']}")
+    print(f"transcribe={health['transcribe']}")
+    print(f"session={session_state}")
     print(f"artifacts={ARTIFACTS_DIR}")
     if problems:
         for problem in problems:
@@ -764,9 +1172,200 @@ def cmd_session() -> None:
     print(f"agent_task_file={AGENT_TASK_PATH}")
 
 
+def cmd_snapshot() -> None:
+    instance = read_instance()
+    if str(instance.get("session", "")) != "ready":
+        die("snapshot needs session=ready. Launch with live Clerk keys.")
+    feature = "home"
+    path = "/"
+    if len(sys.argv) >= 3:
+        feature = sys.argv[2]
+    if len(sys.argv) >= 4:
+        path = sys.argv[3]
+        if not path.startswith("/"):
+            die("snapshot path must start with /")
+    dest = ARTIFACTS_DIR / feature
+    dest.mkdir(parents=True, exist_ok=True)
+    ui_url = str(instance["ui_url"]).rstrip("/")
+    start_url = f"{ui_url}{path}"
+    secrets = load_secrets()
+    login = mint_browser_login(
+        secrets["CLERK_SECRET_KEY"],
+        str(instance.get("clerk_user_id", "")),
+        ui_url,
+    )
+    shot = dest / "shot.png"
+    html = dest / "shot.html"
+    aria = dest / "shot.aria.txt"
+    say(f"snapshot feature={feature} url={start_url}")
+    with CdpChrome() as cdp:
+        cdp.drive(
+            [
+                {"action": "signIn"},
+                {"action": "goto", "url": start_url},
+                {"action": "waitMs", "ms": 800},
+                capture_step(shot, html, aria),
+            ],
+            ticket=login["ticket"],
+            testing_token=login["testing_token"],
+            origin=ui_url,
+            login_url=login["login_url"],
+        )
+    print(f"shot={shot}")
+    print(f"aria={aria}")
+
+
+def cmd_browser_test() -> None:
+    instance = read_instance()
+    if str(instance.get("session", "")) != "ready":
+        die("browser-test needs session=ready. Launch with live Clerk keys.")
+    secrets = load_secrets()
+    ui_url = str(instance["ui_url"]).rstrip("/")
+    api_url = str(instance["api_url"]).rstrip("/")
+    health_url = f"{api_url}/health"
+    sign_in_url = f"{ui_url}/sign-in"
+    stack = ARTIFACTS_DIR / "stack"
+    home = ARTIFACTS_DIR / "home"
+    meetings = ARTIFACTS_DIR / "meetings-list"
+    tasks = ARTIFACTS_DIR / "tasks"
+    fred = ARTIFACTS_DIR / "ask-fred"
+    for dest in (stack, home, meetings, tasks, fred):
+        dest.mkdir(parents=True, exist_ok=True)
+    problems: list[str] = []
+
+    print("harness=cdp")
+    print("login=clerk-ticket")
+    print(f"open {sign_in_url}")
+    print(f"open {ui_url}/")
+    print(f"open {ui_url}/meetings")
+    print(f"open {ui_url}/tasks")
+    print(f"open {health_url}")
+
+    health_status, health_body = http_get(health_url, timeout=15)
+    (stack / "health.json").write_text(health_body)
+    health = parse_health(health_body)
+    if health_status not in (200, 503) or health["blob"] != "ok":
+        problems.append(f"API health blob not ok http={health_status}")
+
+    sign_status, _ = http_get(sign_in_url, timeout=15)
+    if sign_status != 200:
+        problems.append(f"UI /sign-in -> {sign_status}")
+    home_status, _ = http_get(f"{ui_url}/", timeout=10)
+    if home_status not in (301, 302, 303, 307, 308):
+        problems.append(f"UI / -> {home_status} (want redirect)")
+
+    jwt = SESSION_JWT_PATH.read_text().strip() if SESSION_JWT_PATH.is_file() else ""
+    if jwt == "":
+        problems.append("session jwt missing")
+    else:
+        meetings_status, meetings_body = http_get(
+            f"{api_url}/meetings?page=1&limit=5",
+            timeout=15,
+            headers={"Authorization": f"Bearer {jwt}"},
+        )
+        (meetings / "empty.json").write_text(meetings_body)
+        if meetings_status != 200:
+            problems.append(f"API /meetings with Bearer -> {meetings_status}")
+
+    login = mint_browser_login(
+        secrets["CLERK_SECRET_KEY"],
+        str(instance.get("clerk_user_id", "")),
+        ui_url,
+    )
+
+    with CdpChrome() as cdp:
+        print(f"cdp={cdp.cdp_base}")
+        cdp.drive(
+            [
+                {"action": "goto", "url": health_url},
+                {"action": "waitText", "text": '"blob":"ok"', "timeoutMs": 15000},
+                capture_step(stack / "health.png", stack / "health.html", stack / "health.aria.txt"),
+                {"action": "goto", "url": sign_in_url},
+                {"action": "waitPath", "path": "/sign-in"},
+                {"action": "waitMs", "ms": 800},
+                capture_step(
+                    stack / "sign-in.png",
+                    stack / "sign-in.html",
+                    stack / "sign-in.aria.txt",
+                ),
+                {"action": "signIn"},
+                {"action": "waitPath", "path": "/", "exact": True, "timeoutMs": 25000},
+                {"action": "waitText", "text": "Verify", "timeoutMs": 25000},
+                {"action": "waitText", "text": "Good ", "timeoutMs": 20000},
+                capture_step(home / "home.png", home / "home.html", home / "home.aria.txt"),
+                {"action": "click", "name": "Meetings"},
+                {"action": "waitPath", "path": "/meetings", "timeoutMs": 15000},
+                {"action": "waitText", "text": "Capture your first meeting", "timeoutMs": 20000},
+                capture_step(
+                    meetings / "empty.png",
+                    meetings / "empty.html",
+                    meetings / "empty.aria.txt",
+                ),
+                {"action": "click", "name": "Tasks"},
+                {"action": "waitPath", "path": "/tasks", "timeoutMs": 15000},
+                {"action": "waitText", "text": "Capture your first meeting", "timeoutMs": 20000},
+                capture_step(tasks / "empty.png", tasks / "empty.html", tasks / "empty.aria.txt"),
+                {"action": "click", "name": "AskFred"},
+                {"action": "waitText", "text": "Hi Verify!", "timeoutMs": 20000},
+                capture_step(fred / "open.png", fred / "open.html", fred / "open.aria.txt"),
+                {"action": "click", "name": "Close AskFred"},
+                {"action": "click", "name": "Home"},
+                {"action": "waitPath", "path": "/", "exact": True, "timeoutMs": 15000},
+                capture_step(stack / "root.png", stack / "root.html", stack / "root.aria.txt"),
+            ],
+            ticket=login["ticket"],
+            testing_token=login["testing_token"],
+            origin=ui_url,
+            login_url=login["login_url"],
+        )
+
+    home_text = (home / "home.aria.txt").read_text() if (home / "home.aria.txt").is_file() else ""
+    home_html = (home / "home.html").read_text() if (home / "home.html").is_file() else ""
+    if "Verify" not in home_text and "Verify" not in home_html:
+        problems.append("signed-in Home did not show Verify")
+    if "Good " not in home_text and "Good " not in home_html:
+        problems.append("signed-in Home did not show the greeting")
+    meetings_text = (
+        (meetings / "empty.aria.txt").read_text() if (meetings / "empty.aria.txt").is_file() else ""
+    )
+    if "Capture your first meeting" not in meetings_text:
+        problems.append("Meetings empty copy missing after Clerk login")
+    fred_text = (fred / "open.aria.txt").read_text() if (fred / "open.aria.txt").is_file() else ""
+    if "Hi Verify!" not in fred_text:
+        problems.append("AskFred did not greet Verify")
+
+    notes = stack / "notes.md"
+    notes.write_text(
+        "\n".join(
+            [
+                "# Stack browser test",
+                "",
+                "- harness: cdp",
+                "- login: clerk-ticket",
+                f"- ui_url: {ui_url}",
+                f"- sign_in_url: {sign_in_url}",
+                f"- health_url: {health_url}",
+                f"- health_http: {health_status}",
+                f"- blob: {health['blob']}",
+                f"- transcribe: {health['transcribe']}",
+                f"- sign_in_http: {sign_status}",
+                f"- root_http: {home_status}",
+                f"- problems: {', '.join(problems) if problems else 'none'}",
+                "",
+            ]
+        )
+        + "\n"
+    )
+    if problems:
+        for problem in problems:
+            print(f"FAIL {problem}")
+        raise SystemExit(1)
+    print("browser-test=ok")
+
+
 def usage() -> None:
     die(
-        "usage: control-fireflies launch|doctor|status|session|cleanup|sample-video|sample-audio",
+        "usage: control-fireflies launch|doctor|status|session|browser-test|snapshot|cleanup|sample-video|sample-audio",
         2,
     )
 
@@ -783,6 +1382,10 @@ def main() -> None:
         cmd_status()
     elif command == "session":
         cmd_session()
+    elif command == "browser-test":
+        cmd_browser_test()
+    elif command == "snapshot":
+        cmd_snapshot()
     elif command == "cleanup":
         cmd_cleanup()
     elif command == "sample-video":

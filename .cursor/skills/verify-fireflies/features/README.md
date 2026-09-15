@@ -5,10 +5,10 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Baseline preconditions
 
 - Launch with `.cursor/skills/verify-fireflies/scripts/control-fireflies launch`.
-- Doctor must print `doctor=ok` for `http://localhost:18080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:13000` (or `FIREFLIES_API_PORT`).
+- Doctor must print `doctor=ok` for `http://localhost:8080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:3000` (or `FIREFLIES_API_PORT`), and `session=ready`.
+- Run `control-fireflies browser-test` before deeper recipes. It signs in with a Clerk ticket and drives Home, Meetings, Tasks, and AskFred over CDP.
 - Mongo database is `fireflies_verify`. It starts empty unless a feature seeds it through the UI or the Next upload route.
-- Viewport 1440x900 (`Emulation.setDeviceMetricsOverride`).
-- Never open `http://127.0.0.1:8080`, `http://localhost:8080`, or `http://127.0.0.1:3000`.
+- Viewport 1440x900 for signed-in recipes.
 - Never drive an instance whose pids are missing from `.cursor/skills/verify-fireflies/.run/instance.json`.
 
 ## Driving conventions
@@ -17,13 +17,13 @@ This directory is the maintained source for verifying the user-facing behavior o
 - Prefer accessible names from `browser_snapshot` over CSS and coordinates.
 - Treat every command as literal. Keep quoted names unchanged.
 - Run process actions through `control-fireflies`.
-- Run browser actions through Cursor `browser_*` tools against `ui_url`.
+- Run browser actions through Cursor `browser_*` tools against `ui_url`, or `control-fireflies snapshot` when those tools are missing.
 - After a mutation, restore the empty verify database with `cleanup` only at the end of the whole run, not between proof screenshots.
 
 ## Proof and skip reporting
 
 - Capture the user action and the resulting state, not only the final screen.
-- UI proof includes an ARIA snapshot and a screenshot with `Davi` or the page heading visible.
+- UI proof includes an ARIA snapshot and a screenshot with `Verify` or the page heading visible.
 - Mutation proof includes a second read of the meetings list or detail.
 - Record the feature ID and entry point in `artifacts/<feature-id>/notes.md`.
 - Report an unreachable path with the attempted command and the unmet precondition.
@@ -42,8 +42,9 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Home](./home.md) covers greeting, insight cards, empty state, and Last meetings.
-- [Meetings list](./meetings-list.md) covers the library, empty copy, pagination, and opening a row.
+- [Stack](./stack.md) covers running backend and frontend, opening their ports, and checking `/health` plus `/sign-in` in Chrome.
+- [Home](./home.md) covers greeting, insight cards, empty state, Last meetings, and Recent tasks.
+- [Meetings list](./meetings-list.md) covers the library, status tabs, empty copy, pagination, and opening a card.
 - [Meeting detail](./meeting-detail.md) covers video or audio playback, summary, tasks, and speaker turns.
 - [Capture](./capture.md) covers screen record, video or audio upload, and the meetings list after ingest.
 - [AskFred](./ask-fred.md) covers opening the assistant from Home, the header, and the sidebar, then sending a prompt.

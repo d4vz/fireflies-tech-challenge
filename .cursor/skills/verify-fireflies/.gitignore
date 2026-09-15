@@ -1,3 +1,4 @@
 .run/
 artifacts/*
 !artifacts/.gitkeep
+scripts/__pycache__/
