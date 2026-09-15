@@ -26,7 +26,7 @@ Preconditions:
 
 - **Open the API link.** Run `control-fireflies browser-test`, or `browser_navigate` to `health_url`. The page or saved `health.json` includes `"blob":"ok"` (or `services.blob` `ok`). HTTP may be 200 or 503.
 - **Open the UI sign-in link.** CDP navigates to `http://localhost:8080/sign-in`. The Next page includes the brand and Clerk `<SignIn />`.
-- **Sign in.** Browser-test mints `POST /sign_in_tokens` and calls `window.Clerk.client.signIn.create({ strategy: "ticket" })`. Home shows `Good …, Verify`.
+- **Sign in.** Browser-test mints `POST /sign_in_tokens`, opens `/sign-in?__clerk_ticket=…` (or the Clerk accept URL), and falls back to `window.Clerk` ticket sign-in. Home shows `Good …, Verify`.
 - **Navigate.** Sidebar `Meetings` shows `Capture your first meeting`. Sidebar `Tasks` shows the same empty copy. `AskFred` shows `Hi Verify!`.
 - **Proof.** After cleanup: `artifacts/stack/notes.md` has `login: clerk-ticket`. `artifacts/home/home.*` shows Verify. `artifacts/meetings-list/empty.*` and `artifacts/tasks/empty.*` show the capture copy. `artifacts/ask-fred/open.*` shows `Hi Verify!`.
 

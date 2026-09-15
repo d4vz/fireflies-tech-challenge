@@ -358,6 +358,41 @@ async function waitPath(cdp, path, exact, timeoutMs) {
   throw new Error(`timed out waiting for path ${path}`);
 }
 
+async function signIn(cdp, ticket, origin, loginUrl) {
+  if (origin === "") {
+    fail("plan signIn needs origin");
+  }
+  if (ticket === "") {
+    fail("plan signIn needs ticket");
+  }
+  const app = origin.replace(/\/$/, "");
+  const ticketUrl = `${app}/sign-in?__clerk_ticket=${encodeURIComponent(ticket)}`;
+  const candidates = [];
+  try {
+    if (loginUrl !== "") {
+      const loginHost = new URL(loginUrl).host;
+      const originHost = new URL(app).host;
+      if (loginHost !== originHost) {
+        candidates.push(loginUrl);
+      }
+    }
+  } catch {
+    // Ignore a malformed Clerk accept URL and use the app ticket query.
+  }
+  candidates.push(ticketUrl);
+  for (const url of candidates) {
+    await navigate(cdp, url);
+    try {
+      await waitText(cdp, "Verify", 12000);
+      return;
+    } catch {
+      // Try the next candidate, then the Clerk JS ticket API.
+    }
+  }
+  await signInTicket(cdp, ticket);
+  await navigate(cdp, `${app}/`);
+}
+
 async function signInTicket(cdp, ticket) {
   const expression = `(async () => {
     const ticket = ${JSON.stringify(ticket)};
@@ -400,6 +435,8 @@ async function runPlan(planPath) {
   const steps = Array.isArray(plan.steps) ? plan.steps : [];
   const testingToken = typeof plan.testingToken === "string" ? plan.testingToken : "";
   const ticket = typeof plan.ticket === "string" ? plan.ticket : "";
+  const origin = typeof plan.origin === "string" ? plan.origin : "";
+  const loginUrl = typeof plan.loginUrl === "string" ? plan.loginUrl : "";
   if (cdpBase === "" || steps.length === 0) {
     fail("plan needs cdp and steps");
   }
@@ -428,6 +465,9 @@ async function runPlan(planPath) {
           break;
         case "capture":
           await captureNow(cdp, String(step.shot || ""), step.html || "", step.aria || "");
+          break;
+        case "signIn":
+          await signIn(cdp, ticket, origin, loginUrl);
           break;
         case "signInTicket":
           if (ticket === "") {

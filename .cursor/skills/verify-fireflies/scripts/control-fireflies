@@ -801,6 +801,8 @@ class CdpChrome:
         steps: list[dict[str, Any]],
         ticket: str = "",
         testing_token: str = "",
+        origin: str = "",
+        login_url: str = "",
     ) -> None:
         plan_path = RUN_DIR / "cdp-plan.json"
         plan_path.write_text(
@@ -809,6 +811,8 @@ class CdpChrome:
                     "cdp": self.cdp_base,
                     "ticket": ticket,
                     "testingToken": testing_token,
+                    "origin": origin,
+                    "loginUrl": login_url,
                     "steps": steps,
                 }
             )
@@ -1197,14 +1201,15 @@ def cmd_snapshot() -> None:
     with CdpChrome() as cdp:
         cdp.drive(
             [
-                {"action": "goto", "url": f"{ui_url}/sign-in"},
-                {"action": "signInTicket"},
+                {"action": "signIn"},
                 {"action": "goto", "url": start_url},
                 {"action": "waitMs", "ms": 800},
                 capture_step(shot, html, aria),
             ],
             ticket=login["ticket"],
             testing_token=login["testing_token"],
+            origin=ui_url,
+            login_url=login["login_url"],
         )
     print(f"shot={shot}")
     print(f"aria={aria}")
@@ -1283,8 +1288,7 @@ def cmd_browser_test() -> None:
                     stack / "sign-in.html",
                     stack / "sign-in.aria.txt",
                 ),
-                {"action": "signInTicket"},
-                {"action": "goto", "url": f"{ui_url}/"},
+                {"action": "signIn"},
                 {"action": "waitPath", "path": "/", "exact": True, "timeoutMs": 25000},
                 {"action": "waitText", "text": "Verify", "timeoutMs": 25000},
                 {"action": "waitText", "text": "Good ", "timeoutMs": 20000},
@@ -1311,6 +1315,8 @@ def cmd_browser_test() -> None:
             ],
             ticket=login["ticket"],
             testing_token=login["testing_token"],
+            origin=ui_url,
+            login_url=login["login_url"],
         )
 
     home_text = (home / "home.aria.txt").read_text() if (home / "home.aria.txt").is_file() else ""

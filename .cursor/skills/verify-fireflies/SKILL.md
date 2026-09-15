@@ -23,7 +23,7 @@ The helper is `.cursor/skills/verify-fireflies/scripts/control-fireflies`. Run i
 
 - Opens `/health`, then `/sign-in`
 - Mints `POST /sign_in_tokens` for the launch Clerk user
-- Signs in and waits for `Verify` on Home
+- Opens `/sign-in?__clerk_ticket=…` (Clerk accept URL if Clerk returns one), then waits for `Verify` on Home
 - Clicks sidebar `Meetings`, `Tasks`, `AskFred`, then `Home`
 
 Clerk's development handshake hangs on `127.0.0.1`, so the UI binds `localhost`. The browser talks to Next `/api/*`, not to Hono.
