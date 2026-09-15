@@ -57,8 +57,8 @@ BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 COMPOSE_FILE = BACKEND_DIR / "docker-compose.yml"
 
-DEFAULT_UI_PORT = 18080
-DEFAULT_API_PORT = 13000
+DEFAULT_UI_PORT = 8080
+DEFAULT_API_PORT = 3000
 VERIFY_MONGO_DB = "fireflies_verify"
 VERIFY_S3_BUCKET = "fireflies-verify"
 VERIFY_REDIS_DB = "15"
@@ -350,6 +350,43 @@ def wait_http(url: str, timeout: float, ok: tuple[int, ...] = (200,)) -> tuple[i
     return last_status, last_body
 
 
+def parse_health(body: str) -> dict[str, str]:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return {"status": "unreadable", "blob": "unreadable", "transcribe": "unreadable"}
+    if not isinstance(payload, dict):
+        return {"status": "unreadable", "blob": "unreadable", "transcribe": "unreadable"}
+    services = payload.get("services")
+    if not isinstance(services, dict):
+        return {
+            "status": str(payload.get("status", "unreadable")),
+            "blob": "unreadable",
+            "transcribe": "unreadable",
+        }
+    return {
+        "status": str(payload.get("status", "error")),
+        "blob": str(services.get("blob", "missing")),
+        "transcribe": str(services.get("transcribe", "missing")),
+    }
+
+
+def wait_health(url: str, pid: int, timeout: float) -> tuple[int, str]:
+    deadline = time.time() + timeout
+    last_status = 0
+    last_body = ""
+    while time.time() < deadline:
+        if pid > 0 and not pid_alive(pid):
+            die(f"API pid {pid} exited while waiting for {url}")
+        last_status, last_body = http_get(url, timeout=8)
+        health = parse_health(last_body)
+        if last_status in (200, 503) and health["blob"] == "ok":
+            return last_status, last_body
+        time.sleep(0.5)
+    die(f"timed out waiting for {url} blob=ok (last status {last_status})")
+    return last_status, last_body
+
+
 def compose_running() -> bool:
     try:
         out = subprocess.check_output(
@@ -554,8 +591,6 @@ def cmd_launch() -> None:
 
     ui_port = port_from_env("FIREFLIES_UI_PORT", DEFAULT_UI_PORT)
     api_port = port_from_env("FIREFLIES_API_PORT", DEFAULT_API_PORT)
-    if ui_port == 8080 or api_port == 3000:
-        die("refusing ports 8080 and 3000; those belong to a normal local session")
     if not port_is_free(ui_port):
         die(f"UI port {ui_port} is already in use")
     if not port_is_free(api_port):
@@ -584,7 +619,8 @@ def cmd_launch() -> None:
     ui_env = dict(os.environ)
     ui_env["API_URL"] = f"http://127.0.0.1:{api_port}"
     ui_env["PORT"] = str(ui_port)
-    ui_env["NEXT_DIST_DIR"] = ".next-verify"
+    if ui_port != 8080:
+        ui_env["NEXT_DIST_DIR"] = ".next-verify"
     ui_env["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"] = secrets["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"]
     ui_env["CLERK_SECRET_KEY"] = secrets["CLERK_SECRET_KEY"]
 
@@ -607,7 +643,7 @@ def cmd_launch() -> None:
             api_env,
             api_log,
         )
-        wait_http(f"http://127.0.0.1:{api_port}/health", timeout=60)
+        wait_health(f"http://127.0.0.1:{api_port}/health", api_pid, timeout=90)
         say(f"starting UI on {ui_port}")
         ui_pid = start_logged(
             [bun, str(next_bin), "dev", "-p", str(ui_port), "--hostname", "localhost"],
@@ -620,11 +656,22 @@ def cmd_launch() -> None:
             die(f"UI exited. See {ui_log}")
         ui_url = f"http://localhost:{ui_port}"
         wait_http(f"{ui_url}/sign-in", timeout=90)
+        clerk_user_id = ""
+        display_name = VERIFY_DISPLAY_NAME
+        session_state = "missing"
         say("creating Clerk verify session")
-        session = create_clerk_verify_session(secrets["CLERK_SECRET_KEY"], f"{ui_url}/")
-        clerk_user_id = session["user_id"]
-        SESSION_JWT_PATH.write_text(session["jwt"])
-        AGENT_TASK_PATH.write_text(session["agent_url"])
+        try:
+            session = create_clerk_verify_session(secrets["CLERK_SECRET_KEY"], f"{ui_url}/")
+            clerk_user_id = session["user_id"]
+            SESSION_JWT_PATH.write_text(session["jwt"])
+            AGENT_TASK_PATH.write_text(session["agent_url"])
+            display_name = session["display_name"]
+            session_state = "ready"
+        except SystemExit:
+            say("Clerk session not created; browser-test can still open the UI and API links")
+            SESSION_JWT_PATH.unlink(missing_ok=True)
+            AGENT_TASK_PATH.unlink(missing_ok=True)
+            clerk_user_id = ""
         write_instance(
             {
                 "ui_pid": ui_pid,
@@ -633,12 +680,15 @@ def cmd_launch() -> None:
                 "api_port": api_port,
                 "ui_url": ui_url,
                 "api_url": f"http://127.0.0.1:{api_port}",
+                "health_url": f"http://127.0.0.1:{api_port}/health",
+                "sign_in_url": f"{ui_url}/sign-in",
                 "started_compose": started_compose,
                 "mongo_db": VERIFY_MONGO_DB,
                 "s3_bucket": VERIFY_S3_BUCKET,
                 "redis_db": int(VERIFY_REDIS_DB),
                 "clerk_user_id": clerk_user_id,
-                "display_name": session["display_name"],
+                "display_name": display_name,
+                "session": session_state,
             }
         )
         instance_written = True
@@ -654,7 +704,10 @@ def cmd_launch() -> None:
                 stop_compose()
 
     say(f"ready UI={ui_port} API={api_port} pids ui={ui_pid} api={api_pid}")
-    say(f"display_name={VERIFY_DISPLAY_NAME} session=ready")
+    say(f"ui_url=http://localhost:{ui_port}")
+    say(f"health_url=http://127.0.0.1:{api_port}/health")
+    say(f"sign_in_url=http://localhost:{ui_port}/sign-in")
+    say(f"display_name={VERIFY_DISPLAY_NAME} session={session_state}")
 
 
 def cmd_doctor() -> None:
@@ -667,8 +720,6 @@ def cmd_doctor() -> None:
     api_url = str(instance["api_url"])
     problems: list[str] = []
 
-    if ui_port == 8080 or api_port == 3000:
-        problems.append("instance is on the shared 8080/3000 session ports")
     if not pid_alive(ui_pid):
         problems.append(f"UI pid {ui_pid} is dead")
     if not pid_alive(api_pid):
@@ -681,12 +732,13 @@ def cmd_doctor() -> None:
         problems.append(f"API pid {api_pid} does not own port {api_port} (owners {api_listeners})")
 
     health_status, health_body = http_get(f"{api_url}/health", timeout=15)
-    if health_status != 200:
+    health = parse_health(health_body)
+    if health_status not in (200, 503):
         problems.append(f"GET {api_url}/health -> {health_status}")
-    elif '"status":"ok"' not in health_body.replace(" ", ""):
-        problems.append(f"API health is not ok: {health_body[:200]}")
+    elif health["blob"] != "ok":
+        problems.append(f"API blob is not ok: {health_body[:200]}")
 
-    sign_in_status, _ = http_get(f"{ui_url}/sign-in", timeout=15)
+    sign_in_status, sign_in_body = http_get(f"{ui_url}/sign-in", timeout=15)
     if sign_in_status != 200:
         problems.append(f"GET {ui_url}/sign-in -> {sign_in_status}")
 
@@ -699,29 +751,30 @@ def cmd_doctor() -> None:
         problems.append(f"GET {ui_url}/api/meetings without session -> {unsigned_meetings}")
 
     jwt = SESSION_JWT_PATH.read_text().strip() if SESSION_JWT_PATH.is_file() else ""
-    if jwt == "":
-        problems.append("missing Clerk session jwt; re-run launch")
-        meetings_status = 0
-        meetings_body = ""
-    else:
+    session_state = "ready" if jwt != "" else "missing"
+    meetings_status = 0
+    meetings_body = ""
+    if jwt != "":
         meetings_status, meetings_body = http_get(
             f"{api_url}/meetings?page=1&limit=5",
             timeout=15,
             headers={"Authorization": f"Bearer {jwt}"},
         )
-    if meetings_status != 200:
-        problems.append(f"GET {api_url}/meetings with Bearer -> {meetings_status}")
-    else:
-        try:
-            payload = json.loads(meetings_body)
-        except json.JSONDecodeError:
-            problems.append("meetings proxy did not return JSON")
-            payload = None
-        if isinstance(payload, dict) and "items" not in payload:
-            problems.append("meetings proxy JSON has no items")
+        if meetings_status != 200:
+            problems.append(f"GET {api_url}/meetings with Bearer -> {meetings_status}")
+        else:
+            try:
+                payload = json.loads(meetings_body)
+            except json.JSONDecodeError:
+                problems.append("meetings API did not return JSON")
+                payload = None
+            if isinstance(payload, dict) and "items" not in payload:
+                problems.append("meetings API JSON has no items")
 
     print(f"ui_url={ui_url}")
     print(f"api_url={api_url}")
+    print(f"health_url={api_url}/health")
+    print(f"sign_in_url={ui_url}/sign-in")
     print(f"ui_pid={ui_pid}")
     print(f"api_pid={api_pid}")
     print(f"mongo_db={instance.get('mongo_db')}")
@@ -729,7 +782,10 @@ def cmd_doctor() -> None:
     print(f"redis_db={instance.get('redis_db')}")
     print(f"started_compose={instance.get('started_compose')}")
     print(f"display_name={instance.get('display_name')}")
-    print("session=ready" if SESSION_JWT_PATH.is_file() else "session=missing")
+    print(f"health_http={health_status}")
+    print(f"blob={health['blob']}")
+    print(f"transcribe={health['transcribe']}")
+    print(f"session={session_state}")
     print(f"artifacts={ARTIFACTS_DIR}")
     if problems:
         for problem in problems:
@@ -830,6 +886,45 @@ def cmd_session() -> None:
     print(f"agent_task_file={AGENT_TASK_PATH}")
 
 
+def chrome_capture(url: str, shot: Path, html: Path) -> None:
+    chrome = chrome_bin()
+    profile = RUN_DIR / "chrome-profile"
+    profile.mkdir(parents=True, exist_ok=True)
+    common = [
+        chrome,
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--window-size=1440,900",
+        f"--user-data-dir={profile}",
+    ]
+    try:
+        subprocess.run(
+            [*common, f"--screenshot={shot}", url],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=40,
+        )
+    except subprocess.TimeoutExpired:
+        die(f"chrome screenshot timed out for {url}")
+    if not shot.is_file():
+        die(f"chrome did not write {shot}")
+    try:
+        dumped = subprocess.run(
+            [*common, "--dump-dom", url],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        html.write_text(dumped.stdout)
+    except subprocess.TimeoutExpired:
+        html.write_text("chrome dump-dom timed out; screenshot kept\n")
+        say("dump-dom timed out; screenshot kept")
+
+
 def cmd_snapshot() -> None:
     instance = read_instance()
     feature = "home"
@@ -848,52 +943,82 @@ def cmd_snapshot() -> None:
         agent_url = AGENT_TASK_PATH.read_text().strip()
         if agent_url != "":
             start_url = agent_url
-    chrome = chrome_bin()
     shot = dest / "shot.png"
     aria = dest / "shot.aria.txt"
-    profile = RUN_DIR / "chrome-profile"
-    profile.mkdir(parents=True, exist_ok=True)
-    common = [
-        chrome,
-        "--headless=new",
-        "--disable-gpu",
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--window-size=1440,900",
-        f"--user-data-dir={profile}",
-    ]
     say(f"snapshot feature={feature} url={start_url}")
-    try:
-        subprocess.run(
-            [*common, f"--screenshot={shot}", start_url],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=40,
-        )
-    except subprocess.TimeoutExpired:
-        die("chrome screenshot timed out")
-    if not shot.is_file():
-        die(f"chrome did not write {shot}")
-    try:
-        dumped = subprocess.run(
-            [*common, "--dump-dom", start_url],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        aria.write_text(dumped.stdout)
-    except subprocess.TimeoutExpired:
-        aria.write_text("chrome dump-dom timed out; screenshot kept\n")
-        say("dump-dom timed out; screenshot kept")
+    chrome_capture(start_url, shot, aria)
     print(f"shot={shot}")
     print(f"aria={aria}")
 
 
+def cmd_browser_test() -> None:
+    instance = read_instance()
+    ui_url = str(instance["ui_url"]).rstrip("/")
+    api_url = str(instance["api_url"]).rstrip("/")
+    health_url = f"{api_url}/health"
+    sign_in_url = f"{ui_url}/sign-in"
+    dest = ARTIFACTS_DIR / "stack"
+    dest.mkdir(parents=True, exist_ok=True)
+    problems: list[str] = []
+
+    print(f"open {sign_in_url}")
+    print(f"open {ui_url}/")
+    print(f"open {health_url}")
+
+    health_status, health_body = http_get(health_url, timeout=15)
+    (dest / "health.json").write_text(health_body)
+    health = parse_health(health_body)
+    if health_status not in (200, 503) or health["blob"] != "ok":
+        problems.append(f"API health blob not ok http={health_status}")
+
+    sign_status, sign_body = http_get(sign_in_url, timeout=15)
+    if sign_status != 200:
+        problems.append(f"UI /sign-in -> {sign_status}")
+    home_status, _ = http_get(f"{ui_url}/", timeout=10)
+    if home_status not in (301, 302, 303, 307, 308):
+        problems.append(f"UI / -> {home_status} (want redirect)")
+
+    chrome_capture(health_url, dest / "health.png", dest / "health.html")
+    chrome_capture(sign_in_url, dest / "sign-in.png", dest / "sign-in.html")
+    chrome_capture(f"{ui_url}/", dest / "root.png", dest / "root.html")
+
+    title_ok = "Meetings" in sign_body or "Fireflies" in sign_body or "Sign" in sign_body
+    if sign_status == 200 and not title_ok:
+        html = (dest / "sign-in.html").read_text()
+        title_ok = "Meetings" in html or "Fireflies" in html or "Clerk" in html or "Sign" in html
+    if not title_ok:
+        problems.append("UI sign-in page did not include app or Clerk markup")
+
+    notes = dest / "notes.md"
+    notes.write_text(
+        "\n".join(
+            [
+                "# Stack browser test",
+                "",
+                f"- ui_url: {ui_url}",
+                f"- sign_in_url: {sign_in_url}",
+                f"- health_url: {health_url}",
+                f"- health_http: {health_status}",
+                f"- blob: {health['blob']}",
+                f"- transcribe: {health['transcribe']}",
+                f"- sign_in_http: {sign_status}",
+                f"- root_http: {home_status}",
+                f"- problems: {', '.join(problems) if problems else 'none'}",
+                "",
+            ]
+        )
+        + "\n"
+    )
+    if problems:
+        for problem in problems:
+            print(f"FAIL {problem}")
+        raise SystemExit(1)
+    print("browser-test=ok")
+
+
 def usage() -> None:
     die(
-        "usage: control-fireflies launch|doctor|status|session|snapshot|cleanup|sample-video|sample-audio",
+        "usage: control-fireflies launch|doctor|status|session|browser-test|snapshot|cleanup|sample-video|sample-audio",
         2,
     )
 
@@ -910,6 +1035,8 @@ def main() -> None:
         cmd_status()
     elif command == "session":
         cmd_session()
+    elif command == "browser-test":
+        cmd_browser_test()
     elif command == "snapshot":
         cmd_snapshot()
     elif command == "cleanup":

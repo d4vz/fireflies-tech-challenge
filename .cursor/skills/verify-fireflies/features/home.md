@@ -19,7 +19,7 @@ Home is `/`. After Clerk sign-in it greets the session first name (`Verify` on a
 
 Preconditions:
 
-- `control-fireflies doctor` reports `doctor=ok` and `mongo_db=fireflies_verify`.
+- `control-fireflies doctor` reports `doctor=ok`, `blob=ok`, and `session=ready`.
 - Viewport is 1440x900.
 - The verify database is empty unless a later bullet says otherwise.
 

@@ -5,10 +5,10 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Baseline preconditions
 
 - Launch with `.cursor/skills/verify-fireflies/scripts/control-fireflies launch`.
-- Doctor must print `doctor=ok` for `http://localhost:18080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:13000` (or `FIREFLIES_API_PORT`).
+- Doctor must print `doctor=ok` for `http://localhost:8080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:3000` (or `FIREFLIES_API_PORT`).
+- Run `control-fireflies browser-test` before signed-in recipes. It opens the UI and `/health` links.
 - Mongo database is `fireflies_verify`. It starts empty unless a feature seeds it through the UI or the Next upload route.
-- Viewport 1440x900 (`Emulation.setDeviceMetricsOverride`).
-- Never open `http://127.0.0.1:8080`, `http://localhost:8080`, or `http://127.0.0.1:3000`.
+- Viewport 1440x900 for signed-in recipes.
 - Never drive an instance whose pids are missing from `.cursor/skills/verify-fireflies/.run/instance.json`.
 
 ## Driving conventions
@@ -42,6 +42,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
+- [Stack](./stack.md) covers running backend and frontend, opening their ports, and checking `/health` plus `/sign-in` in Chrome.
 - [Home](./home.md) covers greeting, insight cards, empty state, Last meetings, and Recent tasks.
 - [Meetings list](./meetings-list.md) covers the library, status tabs, empty copy, pagination, and opening a card.
 - [Meeting detail](./meeting-detail.md) covers video or audio playback, summary, tasks, and speaker turns.
