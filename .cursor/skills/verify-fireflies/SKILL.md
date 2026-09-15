@@ -1,15 +1,14 @@
 ---
 name: verify-fireflies
 description: >-
-  Verify the Fireflies app by running the backend and frontend, then driving
-  their ports over Chrome DevTools Protocol. Reach for this to launch the
-  stack, doctor it, CDP-capture sign-in plus /health, and keep screenshots
-  after cleanup.
+  Verify the Fireflies app by running the backend and frontend, signing in
+  with live Clerk keys, then navigating Home / Meetings / Tasks / AskFred
+  over Chrome DevTools Protocol.
 ---
 
 # Verify Fireflies
 
-Start the Hono API and the Next.js UI, then drive their links over Chrome DevTools Protocol. Prove the server and the UI answer. Do not treat a curl-only check as the browser test. Chrome `--screenshot` / `--dump-dom` is not CDP.
+Start the Hono API and the Next.js UI. Sign in with a live Clerk secret and publishable key. Drive Home, Meetings, Tasks, and AskFred over Chrome DevTools Protocol. Do not treat a curl-only check as the browser test. Chrome `--screenshot` / `--dump-dom` is not CDP.
 
 The helper is `.cursor/skills/verify-fireflies/scripts/control-fireflies`. Run it from any cwd.
 
@@ -20,14 +19,16 @@ The helper is `.cursor/skills/verify-fireflies/scripts/control-fireflies`. Run i
 .cursor/skills/verify-fireflies/scripts/control-fireflies cleanup
 ```
 
-`browser-test` is the default proof. It starts system Chrome with `--remote-debugging-port` and runs `scripts/cdp-capture.mjs` (Node 22 WebSocket). CDP methods: `Page.navigate`, `Page.captureScreenshot`, `Runtime.evaluate`, `Accessibility.getFullAXTree`. It opens:
+`browser-test` is the default proof. It starts system Chrome with `--remote-debugging-port` and runs `scripts/cdp-capture.mjs` (Node 22 WebSocket). CDP methods: `Page.navigate`, `Page.captureScreenshot`, `Runtime.evaluate`, `Accessibility.getFullAXTree`, plus a Clerk ticket `signIn` on `window.Clerk`. It:
 
-- UI: `http://localhost:8080/` and `http://localhost:8080/sign-in`
-- API: `http://127.0.0.1:3000/health`
+- Opens `/health`, then `/sign-in`
+- Mints `POST /sign_in_tokens` for the launch Clerk user
+- Signs in and waits for `Verify` on Home
+- Clicks sidebar `Meetings`, `Tasks`, `AskFred`, then `Home`
 
 Clerk's development handshake hangs on `127.0.0.1`, so the UI binds `localhost`. The browser talks to Next `/api/*`, not to Hono.
 
-Read `features/README.md` before a signed-in feature run. Drive every entry point that file lists. Signed-in Home still needs `session=ready`.
+Read `features/README.md` before a deeper feature run. Launch must print `session=ready`. Dummy Clerk keys (`dummy.clerk.accounts.dev`) fail launch.
 
 ## Launch
 
@@ -45,7 +46,7 @@ Ready when:
 - `GET http://127.0.0.1:<api-port>/health` returns JSON with `services.blob` `ok` (HTTP 200 or 503). Transcribe may fail if AssemblyAI is a placeholder; that does not block launch.
 - `GET http://localhost:<ui-port>/sign-in` is 200.
 
-Launch then tries to create a Clerk verify user. If Clerk keys are invalid, it prints `session=missing` and still writes `.run/instance.json`. Signed-in recipes need `session=ready`. Browser-test does not.
+Launch creates a Clerk verify user (`Verify`, `+clerk_test` email) and writes `session=ready`. Invalid or dummy Clerk keys fail launch. Browser-test mints a fresh sign-in ticket for that user.
 
 Logs: `.cursor/skills/verify-fireflies/.run/`. Do not print JWT or agent-task files.
 
@@ -68,42 +69,47 @@ Worth opening in a browser when stdout ends with `doctor=ok` and includes:
 - `GET <ui_url>/` without a session redirects to sign-in
 - `GET <ui_url>/api/meetings?page=1&limit=5` without a session is 401 or a sign-in redirect
 
-`transcribe=` and `session=` are reported. `session=missing` is enough for `browser-test`. Signed-in Home / Capture / AskFred need `session=ready`.
+`transcribe=` and `session=` are reported. `session=ready` is required. `session=missing` fails doctor and browser-test.
 
 If doctor fails, read `.run/api.log` and `.run/ui.log`, then cleanup and relaunch.
 
 ## Drive
 
-Default harness: `control-fireflies browser-test` (Chrome CDP against the printed links). It writes `artifacts/stack/`.
+Default harness: `control-fireflies browser-test`. It writes `artifacts/stack/`, `artifacts/home/`, `artifacts/meetings-list/`, `artifacts/tasks/`, and `artifacts/ask-fred/`.
 
-The CDP client is `scripts/cdp-capture.mjs`. Prove it without the app via `scripts/test_cdp_harness.py`.
+The CDP client is `scripts/cdp-capture.mjs`. Prove capture and click without the app via `scripts/test_cdp_harness.py`.
 
-For a signed-in feature, use Cursor `browser_*` tools against `ui_url`, or `snapshot <feature-id>`. Viewport 1440x900. Handles are in the feature files.
+Deeper recipes use Cursor `browser_*` tools against `ui_url`, or `snapshot <feature-id>`. Viewport 1440x900. Handles are in the feature files.
 
-Stable unsigned handles:
+Stable signed-in handles:
 
 | name | where |
 | --- | --- |
-| document title `Meetings` | every page |
-| brand `alt="Fireflies"` | sign-in and sidebar when signed in |
-| `/sign-in` | Clerk `<SignIn />` when keys are live |
+| greeting `Good …, Verify` | Home after Clerk ticket sign-in |
+| sidebar `Home` / `Meetings` / `Tasks` / `AskFred` | AppFrame nav |
+| `Hi Verify!` | AskFred sheet |
+| brand `alt="Fireflies"` | sign-in and sidebar |
 
 ## Evidence
 
 Write under `.cursor/skills/verify-fireflies/artifacts/<feature-id>/`. Cleanup leaves this tree.
 
-Stack proof (`artifacts/stack/`):
+Browser-test proof:
 
-- `notes.md` with `harness: cdp` and the opened links
-- `health.json` plus `health.png` / `health.html` / `health.aria.txt` of `/health`
-- `sign-in.png` / `sign-in.html` / `sign-in.aria.txt` of `/sign-in`
-- `root.png` / `root.html` / `root.aria.txt` of `/` after the sign-in redirect
+- `artifacts/stack/notes.md` with `harness: cdp` and `login: clerk-ticket`
+- `artifacts/stack/health.*` of `/health` with blob `ok`
+- `artifacts/stack/sign-in.*` of `/sign-in` before the ticket
+- `artifacts/home/home.*` with `Verify` and the greeting
+- `artifacts/meetings-list/empty.*` with `Capture your first meeting`
+- `artifacts/tasks/empty.*` with the same empty copy
+- `artifacts/ask-fred/open.*` with `Hi Verify!`
+- `artifacts/stack/root.*` after returning to Home
 
 Proof standards:
 
-- Chrome CDP opened the UI and health URLs. HTTP-only is not enough for `browser-test`.
+- Chrome CDP signed in with a Clerk ticket. HTTP-only is not enough.
 - Blob `ok` proves the API process and MinIO. Transcribe `ok` is extra.
-- A Clerk `host_invalid` page still counts as UI-up if Next returned 200 and Chrome captured it.
+- `host_invalid` or `session=missing` is a failed run. Use live Clerk keys and allow localhost.
 
 ## Cleanup
 

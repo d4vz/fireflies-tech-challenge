@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /**
- * Drive one URL through Chrome DevTools Protocol.
- * Usage:
+ * Drive Chrome DevTools Protocol.
+ *
+ * One shot:
  *   node cdp-capture.mjs --cdp http://127.0.0.1:9333 --url URL \
  *     --shot out.png --html out.html --aria out.aria.txt
+ *
+ * Signed-in tour:
+ *   node cdp-capture.mjs --plan plan.json
  */
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 function arg(name, fallback = "") {
   const index = process.argv.indexOf(name);
@@ -35,6 +39,7 @@ class Cdp {
     this.nextId = 1;
     this.pending = new Map();
     this.eventWaiters = new Map();
+    this.listeners = new Map();
     this.ws.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
       if (message.id !== undefined && this.pending.has(message.id)) {
@@ -48,6 +53,10 @@ class Cdp {
         return;
       }
       if (typeof message.method === "string") {
+        const persistent = this.listeners.get(message.method) ?? [];
+        for (const listener of persistent) {
+          listener(message.params ?? {});
+        }
         const waiters = this.eventWaiters.get(message.method) ?? [];
         this.eventWaiters.delete(message.method);
         for (const waiter of waiters) {
@@ -62,6 +71,12 @@ class Cdp {
       this.ws.addEventListener("open", () => resolve(undefined));
       this.ws.addEventListener("error", () => reject(new Error("CDP websocket failed")));
     });
+  }
+
+  on(method, fn) {
+    const list = this.listeners.get(method) ?? [];
+    list.push(fn);
+    this.listeners.set(method, list);
   }
 
   send(method, params = {}, timeoutMs = 20000) {
@@ -187,15 +202,52 @@ async function waitReady(cdp, timeoutMs) {
   }
 }
 
-async function main() {
-  const cdpBase = arg("--cdp").replace(/\/$/, "");
-  const url = arg("--url");
-  const shot = arg("--shot");
-  const htmlPath = arg("--html");
-  const ariaPath = arg("--aria");
-  if (cdpBase === "" || url === "" || shot === "") {
-    fail("need --cdp --url --shot");
+async function evaluate(cdp, expression, timeoutMs = 20000) {
+  const result = await cdp.send(
+    "Runtime.evaluate",
+    {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    },
+    timeoutMs,
+  );
+  if (result.exceptionDetails) {
+    const text = result.exceptionDetails.text || result.exceptionDetails.exception?.description;
+    throw new Error(text || "Runtime.evaluate failed");
   }
+  return result.result?.value;
+}
+
+async function navigate(cdp, url) {
+  const loaded = cdp.wait("Page.loadEventFired", 15000).catch(() => null);
+  await cdp.send("Page.navigate", { url });
+  await Promise.race([loaded, waitReady(cdp, 15000)]);
+  await waitReady(cdp, 5000);
+}
+
+async function captureNow(cdp, shot, htmlPath, ariaPath) {
+  const shotResult = await cdp.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+  });
+  const png = shotResult.data;
+  if (typeof png !== "string" || png === "") {
+    fail("Page.captureScreenshot returned no data");
+  }
+  writeFileSync(shot, Buffer.from(png, "base64"));
+  if (htmlPath) {
+    const html = await evaluate(cdp, "document.documentElement.outerHTML");
+    writeFileSync(htmlPath, typeof html === "string" ? html : "");
+  }
+  if (ariaPath) {
+    const tree = await cdp.send("Accessibility.getFullAXTree");
+    const nodes = Array.isArray(tree.nodes) ? tree.nodes : [];
+    writeFileSync(ariaPath, flattenAx(nodes) + "\n");
+  }
+}
+
+async function connect(cdpBase) {
   const versionRes = await fetch(`${cdpBase}/json/version`);
   if (!versionRes.ok) {
     fail(`GET /json/version -> ${versionRes.status}`);
@@ -212,36 +264,219 @@ async function main() {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  const loaded = cdp.wait("Page.loadEventFired", 15000).catch(() => null);
-  await cdp.send("Page.navigate", { url });
-  await Promise.race([loaded, waitReady(cdp, 15000)]);
-  await waitReady(cdp, 5000);
-  await new Promise((resolve) => setTimeout(resolve, 800));
-  const shotResult = await cdp.send("Page.captureScreenshot", {
-    format: "png",
-    fromSurface: true,
+  return cdp;
+}
+
+async function continueFetch(cdp, params, testingToken) {
+  const url = params.request?.url ?? "";
+  const cont = { requestId: params.requestId };
+  if (
+    testingToken !== "" &&
+    /clerk|accounts\.dev/i.test(url) &&
+    !url.includes("__clerk_testing_token=")
+  ) {
+    cont.url = `${url}${url.includes("?") ? "&" : "?"}__clerk_testing_token=${encodeURIComponent(testingToken)}`;
+  }
+  try {
+    await cdp.send("Fetch.continueRequest", cont);
+  } catch {
+    try {
+      await cdp.send("Fetch.continueRequest", { requestId: params.requestId });
+    } catch {
+      // The request may already have been cancelled.
+    }
+  }
+}
+
+async function enableTestingToken(cdp, testingToken) {
+  if (testingToken === "") {
+    return;
+  }
+  await cdp.send("Fetch.enable", {
+    patterns: [{ urlPattern: "*clerk*" }, { urlPattern: "*accounts.dev*" }],
   });
-  const png = shotResult.data;
-  if (typeof png !== "string" || png === "") {
-    fail("Page.captureScreenshot returned no data");
+  cdp.on("Fetch.requestPaused", (params) => {
+    void continueFetch(cdp, params, testingToken);
+  });
+}
+
+const CLICK_SCRIPT = `(() => {
+  const name = __NAME__;
+  const ordered = [
+    ...document.querySelectorAll("aside nav a, aside nav button"),
+    ...document.querySelectorAll("header a, header button"),
+    ...document.querySelectorAll("a, button, [role='link'], [role='button']"),
+  ];
+  const seen = new Set();
+  for (const el of ordered) {
+    if (seen.has(el)) {
+      continue;
+    }
+    seen.add(el);
+    const box = el.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) {
+      continue;
+    }
+    const label = (el.getAttribute("aria-label") || "").trim();
+    const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
+    if (label === name || text === name) {
+      el.click();
+      return true;
+    }
   }
-  writeFileSync(shot, Buffer.from(png, "base64"));
-  if (htmlPath !== "") {
-    const evaluated = await cdp.send("Runtime.evaluate", {
-      expression: "document.documentElement.outerHTML",
-      returnByValue: true,
-    });
-    const html = evaluated.result?.value;
-    writeFileSync(htmlPath, typeof html === "string" ? html : "");
+  throw new Error("no visible control named " + name);
+})()`;
+
+async function clickName(cdp, name) {
+  await evaluate(cdp, CLICK_SCRIPT.replace("__NAME__", JSON.stringify(name)));
+}
+
+async function waitText(cdp, text, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const body = await evaluate(cdp, "document.body ? document.body.innerText : ''");
+    if (typeof body === "string" && body.includes(text)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  if (ariaPath !== "") {
-    const tree = await cdp.send("Accessibility.getFullAXTree");
-    const nodes = Array.isArray(tree.nodes) ? tree.nodes : [];
-    writeFileSync(ariaPath, flattenAx(nodes) + "\n");
+  throw new Error(`timed out waiting for text ${JSON.stringify(text)}`);
+}
+
+async function waitPath(cdp, path, exact, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = await evaluate(cdp, "location.pathname");
+    if (typeof current === "string") {
+      const ok = exact ? current === path : current === path || current.startsWith(`${path}/`);
+      if (ok) {
+        return;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  await cdp.send("Page.close").catch(() => null);
-  cdp.close();
-  console.log(`harness=cdp url=${url} shot=${shot}`);
+  throw new Error(`timed out waiting for path ${path}`);
+}
+
+async function signInTicket(cdp, ticket) {
+  const expression = `(async () => {
+    const ticket = ${JSON.stringify(ticket)};
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      if (window.Clerk) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    const clerk = window.Clerk;
+    if (!clerk) {
+      throw new Error("Clerk JS did not load");
+    }
+    if (typeof clerk.load === "function" && !clerk.loaded) {
+      await clerk.load();
+    }
+    if (!clerk.client || typeof clerk.client.signIn?.create !== "function") {
+      throw new Error("Clerk client signIn is not available");
+    }
+    const signIn = await clerk.client.signIn.create({ strategy: "ticket", ticket });
+    const sessionId = signIn.createdSessionId;
+    if (!sessionId) {
+      throw new Error("Clerk ticket did not create a session");
+    }
+    await clerk.setActive({ session: sessionId });
+    return true;
+  })()`;
+  await evaluate(cdp, expression, 25000);
+}
+
+async function runPlan(planPath) {
+  let plan;
+  try {
+    plan = JSON.parse(readFileSync(planPath, "utf8"));
+  } catch (error) {
+    fail(`cannot read plan: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const cdpBase = String(plan.cdp || "").replace(/\/$/, "");
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  const testingToken = typeof plan.testingToken === "string" ? plan.testingToken : "";
+  const ticket = typeof plan.ticket === "string" ? plan.ticket : "";
+  if (cdpBase === "" || steps.length === 0) {
+    fail("plan needs cdp and steps");
+  }
+  const cdp = await connect(cdpBase);
+  await enableTestingToken(cdp, testingToken);
+  try {
+    for (const step of steps) {
+      const action = String(step.action || "");
+      switch (action) {
+        case "goto":
+          await navigate(cdp, String(step.url || ""));
+          break;
+        case "waitText":
+          await waitText(cdp, String(step.text || ""), Number(step.timeoutMs) || 20000);
+          break;
+        case "waitPath":
+          await waitPath(
+            cdp,
+            String(step.path || ""),
+            Boolean(step.exact),
+            Number(step.timeoutMs) || 20000,
+          );
+          break;
+        case "click":
+          await clickName(cdp, String(step.name || ""));
+          break;
+        case "capture":
+          await captureNow(cdp, String(step.shot || ""), step.html || "", step.aria || "");
+          break;
+        case "signInTicket":
+          if (ticket === "") {
+            fail("plan signInTicket needs ticket");
+          }
+          await signInTicket(cdp, ticket);
+          break;
+        case "waitMs":
+          await new Promise((resolve) => setTimeout(resolve, Number(step.ms) || 0));
+          break;
+        default:
+          fail(`unknown plan action ${action}`);
+      }
+    }
+    console.log(`harness=cdp plan=${planPath} steps=${steps.length}`);
+  } finally {
+    await cdp.send("Page.close").catch(() => null);
+    cdp.close();
+  }
+}
+
+async function runCapture(cdpBase, url, shot, htmlPath, ariaPath) {
+  const cdp = await connect(cdpBase);
+  try {
+    await navigate(cdp, url);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await captureNow(cdp, shot, htmlPath, ariaPath);
+    console.log(`harness=cdp url=${url} shot=${shot}`);
+  } finally {
+    await cdp.send("Page.close").catch(() => null);
+    cdp.close();
+  }
+}
+
+async function main() {
+  const planPath = arg("--plan");
+  if (planPath !== "") {
+    await runPlan(planPath);
+    return;
+  }
+  const cdpBase = arg("--cdp").replace(/\/$/, "");
+  const url = arg("--url");
+  const shot = arg("--shot");
+  const htmlPath = arg("--html");
+  const ariaPath = arg("--aria");
+  if (cdpBase === "" || url === "" || shot === "") {
+    fail("need --cdp --url --shot, or --plan");
+  }
+  await runCapture(cdpBase, url, shot, htmlPath, ariaPath);
 }
 
 main().catch((error) => {

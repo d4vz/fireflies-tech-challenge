@@ -5,8 +5,8 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Baseline preconditions
 
 - Launch with `.cursor/skills/verify-fireflies/scripts/control-fireflies launch`.
-- Doctor must print `doctor=ok` for `http://localhost:8080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:3000` (or `FIREFLIES_API_PORT`).
-- Run `control-fireflies browser-test` before signed-in recipes. It drives the UI and `/health` links over Chrome DevTools Protocol.
+- Doctor must print `doctor=ok` for `http://localhost:8080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:3000` (or `FIREFLIES_API_PORT`), and `session=ready`.
+- Run `control-fireflies browser-test` before deeper recipes. It signs in with a Clerk ticket and drives Home, Meetings, Tasks, and AskFred over CDP.
 - Mongo database is `fireflies_verify`. It starts empty unless a feature seeds it through the UI or the Next upload route.
 - Viewport 1440x900 for signed-in recipes.
 - Never drive an instance whose pids are missing from `.cursor/skills/verify-fireflies/.run/instance.json`.
