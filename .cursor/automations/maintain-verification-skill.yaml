@@ -1,0 +1,22 @@
+name: Daily maintain verification skill
+description: >-
+  Once a day, audit the project-local verify-* skill against source and a live
+  UI pass. Open a pull request only when the pass proves a correction.
+workflow:
+  triggers:
+    - cron:
+        cron: "0 12 * * *"
+  actions: []
+  prompts:
+    - prompt: >-
+        Read and follow .cursor/automations/maintain-verification-skill.md in
+        this repository. Run that pass against the single directory that
+        matches .cursor/skills/verify-*/. Do not skip the live drive. Open a
+        pull request only for outcome changed. For clean or blocked, report
+        the outcome and do not open a pull request.
+  model: ""
+  agentOptions:
+    skipInstall: false
+    memoryEnabled: true
+  gitConfig:
+    branch: main
