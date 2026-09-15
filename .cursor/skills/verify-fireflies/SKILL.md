@@ -3,8 +3,8 @@ name: verify-fireflies
 description: >-
   Verify the Fireflies Next.js meeting UI in a real browser. Reach for this
   to launch an isolated local stack, doctor that instance, drive Home /
-  Meetings / detail / Capture / AskFred as a user would, and keep proof
-  artifacts after cleanup.
+  Meetings / detail / Capture / Tasks / AskFred as a user would, and keep
+  proof artifacts after cleanup.
 ---
 
 # Verify Fireflies
@@ -34,11 +34,13 @@ Launch starts a **new** UI and API on unoccupied ports:
 
 Ready when `GET http://127.0.0.1:<api-port>/health` is 200 with `"status":"ok"` and `GET http://localhost:<ui-port>/sign-in` is 200. Launch then creates a Clerk verify user (`first_name` `Verify`), writes a session JWT to `.run/session.jwt`, and writes a one-time agent-task URL to `.run/agent-task.url`. Do not print those files. Logs live in `.cursor/skills/verify-fireflies/.run/`.
 
-Secrets come from `backend/.env`, then `backend/.env.local`, or `$FIREFLIES_VERIFY_ENV`. `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, and `CLERK_SECRET_KEY` are required. AssemblyAI is the default transcribe vendor in `backend/config.yaml`. If Mongo / Redis / MinIO keys are absent, launch fills the values published in `backend/docker-compose.yml`. Need `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` only when they differ from that compose file. Do not print secrets. `/health` pings the configured transcribe vendor and creates the verify MinIO bucket.
+Secrets come from, in this order, then process env (env wins): parent `.env`, `backend/.env`, `backend/.env.local`, `frontend/.env.local`, then `$FIREFLIES_VERIFY_ENV` if set. `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, `CLERK_SECRET_KEY`, and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` are required and must be live keys. Placeholder values fail Clerk (`401`) and `/health` transcribe. AssemblyAI is the default transcribe vendor in `backend/config.yaml`. If Mongo / Redis / MinIO keys are absent, launch fills the values published in `backend/docker-compose.yml` (host form: `127.0.0.1`). Need `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` only when they differ from that compose file. Do not print secrets. `/health` pings the configured transcribe vendor and creates the verify MinIO bucket.
+
+Launch copies Clerk keys into the Next process. Missing `frontend/node_modules` or `backend/node_modules` triggers `bun install` in that directory. Bun may live at `~/.bun/bin/bun`.
 
 Launch refuses 8080 and 3000. If 18080 or 13000 is busy, stop, or set `FIREFLIES_UI_PORT` / `FIREFLIES_API_PORT`. If `.run/instance.json` still names live pids, run cleanup first. Next.js will not run two `next dev` servers against the same `distDir`. Launch sets `NEXT_DIST_DIR=.next-verify` so it can sit beside a session on 8080. `frontend/next.config.mjs` must keep `distDir: process.env.NEXT_DIST_DIR || ".next"`.
 
-Two verification stacks at once are not supported. Docker volumes `mongo-db`, `minio-data`, and Redis on 6379 are shared infra. Isolation is the verify database, Redis DB, and bucket, not a second compose project.
+Two verification stacks at once are not supported. Docker volumes `mongo-db`, `minio-data`, and Redis on 6379 are shared infra. Isolation is the verify database, Redis DB, and bucket, not a second compose project. MongoDB Atlas Local is the compose `mongodb` image; first pull is large.
 
 ## Doctor
 
@@ -64,12 +66,12 @@ If doctor fails, read `.run/api.log` and `.run/ui.log`, then cleanup and relaunc
 
 ## Drive
 
-Harness: Cursor browser tools (`cursor-ide-browser`) against `ui_url` from doctor. If those tools do not register, drive Chrome against the same `ui_url` and still write artifacts under `artifacts/<feature-id>/`.
+Harness: Cursor browser tools (`cursor-ide-browser`) against `ui_url` from doctor. If those tools do not register, run `control-fireflies snapshot <feature-id>` (Chrome against the same `ui_url`) and still write artifacts under `artifacts/<feature-id>/`.
 
 1. `browser_tabs` action `list`. Reuse a tab only if its URL is already this `ui_url`.
 2. Run `control-fireflies session`. Read `agent_task_file` (do not print it). `browser_navigate` to that URL so Clerk sets cookies and lands on Home. If that URL is spent, set `__session` from `cookie_file` with `browser_cdp` `Network.setCookie` (`name` `__session`, `url` `ui_url`, `httpOnly` true, `secure` false), then `browser_navigate` to `ui_url`.
 3. `browser_lock` action `lock`.
-4. `browser_cdp` method `Emulation.setDeviceMetricsOverride` with `width` 1440, `height` 900, `deviceScaleFactor` 1, `mobile` false. Sidebar nav, Capture label, and the AskFred dock (`xl`) need this width. 1024 shows AskFred as a sheet and hides the dock.
+4. `browser_cdp` method `Emulation.setDeviceMetricsOverride` with `width` 1440, `height` 900, `deviceScaleFactor` 1, `mobile` false. Sidebar, Capture label, page `h1`, insight card titles, and the transcript rail (`lg`) need this width. AskFred is always a right sheet (`sm:max-w-[420px]`), not a dock.
 5. `browser_snapshot` and click by `ref` using the accessible name from the feature file.
 6. `browser_lock` action `unlock` when the run is finished.
 
@@ -77,22 +79,23 @@ Stable handles (from the running UI, not CSS):
 
 | name | role | where |
 | --- | --- | --- |
-| `Home` | link, `aria-current=page` on `/` | sidebar |
+| `Home` | link, `aria-current=page` on `/` | sidebar (`md+`) |
 | `Meetings` | link | sidebar |
-| `AskFred` | link in sidebar; link `aria-label=AskFred` in the header | both |
-| `Capture` | button | header. Opens the Meeting name dialog, then screen recording. Not file upload. |
+| `AskFred` | link in sidebar; link `aria-label=AskFred` in the header (visible text `AskFred`) | both |
+| `Tasks` | link | sidebar |
+| `Capture` | button | header. Opens the Create a meeting dialog, then screen recording. Not file upload. |
 | `Upload` | button `aria-label=Upload` | header chevron, then menu item `Upload` |
-| `Close AskFred` | link | AskFred panel |
+| `Close AskFred` | link | AskFred sheet header |
 | `Ask Fred` | textbox | AskFred composer. Placeholder `Ask anything here`. |
 | `Send` | button | AskFred composer |
 | `Last meetings` | heading | Home preview section |
-| `view more` | link | Home, beside Last meetings |
+| `view more` | link | Home, beside Last meetings (tasks row uses `aria-label=View more tasks`) |
 | `Open navigation` | button | header, below md |
 | `Transcript` | button | meeting detail, below lg |
 
-Document title is `Meetings`. Sidebar brand is the Fireflies wordmark. Greeting on Home is `Good Morning, Verify`, `Good Afternoon, Verify`, or `Good Evening, Verify` from local time (`Verify` is the launch-created Clerk first name). Unsigned `/` redirects to `/sign-in`, which mounts Clerk's default `<SignIn />`. Empty Home and list copy is `Capture your first meeting` with `No meetings yet. Capture or upload a file to start.` Buttons `Capture a meeting` and `Upload a recording` open the same Capture naming dialog as the header. Status chips are `Queued`, `Processing`, `Ready`, `Failed`. Audio rows include sr-only `Audio recording` in the link name.
+Document title is `Meetings`. Sidebar brand is `alt="Fireflies"`. Greeting on Home is `Good Morning, Verify 👋`, `Good Afternoon, Verify 👋`, or `Good Evening, Verify 👋` from local time (`Verify` is the launch-created Clerk first name). A date line sits under the greeting (`en-US` weekday, month, day). Unsigned `/` redirects to `/sign-in`, which mounts Clerk's default `<SignIn />`. Empty Home and list copy is `Capture your first meeting` with `No meetings yet. Capture or upload a file to start.` Buttons `Capture a meeting` and `Upload a recording` open the same Create a meeting dialog as the header. Status chips are `Queued`, `Processing`, `Ready`, `Failed`. Audio rows include sr-only `Audio recording` in the card preview.
 
-The browser talks only to Next `/api/*`. Home and list poll every 2s while any row is queued or processing.
+The browser talks only to Next `/api/*`. Home and list poll every 2s while any row is queued or processing. Home Recent tasks also polls every 2s when that section is shown.
 
 ## Evidence
 
@@ -101,8 +104,8 @@ Write under `.cursor/skills/verify-fireflies/artifacts/<feature-id>/`. Cleanup m
 Each run needs:
 
 - `notes.md` with feature id, entry point, `ui_url`, doctor excerpt, and what changed
-- an ARIA snapshot **before** the action and **after** (`browser_snapshot` saved as `*.aria.txt`)
-- a screenshot of the resulting screen with `Verify` or the `Home` / `Meetings` heading visible (`browser_take_screenshot`, `filename` the artifact png)
+- an ARIA snapshot **before** the action and **after** (`browser_snapshot` saved as `*.aria.txt`, or `snapshot` stdout dumped to the same names)
+- a screenshot of the resulting screen with `Verify` or the `Home` / `Meetings` / `Tasks` heading visible (`browser_take_screenshot` or `snapshot` png)
 - for a mutation: a second user-facing read (reload or another route) plus `GET <ui_url>/api/meetings?page=1&limit=5` JSON saved as `meetings.json`
 
 Proof standards:
@@ -130,11 +133,14 @@ All invocations from repo root, executable bit on:
 .cursor/skills/verify-fireflies/scripts/control-fireflies doctor
 .cursor/skills/verify-fireflies/scripts/control-fireflies status
 .cursor/skills/verify-fireflies/scripts/control-fireflies session
+.cursor/skills/verify-fireflies/scripts/control-fireflies snapshot <feature-id> [path]
 .cursor/skills/verify-fireflies/scripts/control-fireflies cleanup
 .cursor/skills/verify-fireflies/scripts/control-fireflies sample-video
 .cursor/skills/verify-fireflies/scripts/control-fireflies sample-audio
 ```
 
+`snapshot` opens system Chrome against `ui_url`, signs in with the agent-task URL when `.run/agent-task.url` exists, waits for the Home greeting or the given path, and writes `artifacts/<feature-id>/shot.png` plus `shot.aria.txt`. Default path is `/`.
+
 `sample-video` prints a 2s mp4 path (default `.run/sample.mp4`). `sample-audio` prints a 2s mp3 path (default `.run/sample.mp3`). Use them only for Capture.
 
-Optional env: `FIREFLIES_VERIFY_ENV`, `FIREFLIES_UI_PORT`, `FIREFLIES_API_PORT`, `FIREFLIES_VERIFY_VIDEO`, `FIREFLIES_VERIFY_AUDIO`. If `FIREFLIES_VERIFY_ENV` is unset, launch reads `backend/.env` and then `backend/.env.local`.
+Optional env: `FIREFLIES_VERIFY_ENV`, `FIREFLIES_UI_PORT`, `FIREFLIES_API_PORT`, `FIREFLIES_VERIFY_VIDEO`, `FIREFLIES_VERIFY_AUDIO`. If `FIREFLIES_VERIFY_ENV` is unset, launch merges the env files listed under Launch, then process env.

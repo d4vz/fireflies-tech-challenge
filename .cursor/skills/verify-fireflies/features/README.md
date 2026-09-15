@@ -17,13 +17,13 @@ This directory is the maintained source for verifying the user-facing behavior o
 - Prefer accessible names from `browser_snapshot` over CSS and coordinates.
 - Treat every command as literal. Keep quoted names unchanged.
 - Run process actions through `control-fireflies`.
-- Run browser actions through Cursor `browser_*` tools against `ui_url`.
+- Run browser actions through Cursor `browser_*` tools against `ui_url`, or `control-fireflies snapshot` when those tools are missing.
 - After a mutation, restore the empty verify database with `cleanup` only at the end of the whole run, not between proof screenshots.
 
 ## Proof and skip reporting
 
 - Capture the user action and the resulting state, not only the final screen.
-- UI proof includes an ARIA snapshot and a screenshot with `Davi` or the page heading visible.
+- UI proof includes an ARIA snapshot and a screenshot with `Verify` or the page heading visible.
 - Mutation proof includes a second read of the meetings list or detail.
 - Record the feature ID and entry point in `artifacts/<feature-id>/notes.md`.
 - Report an unreachable path with the attempted command and the unmet precondition.
@@ -42,8 +42,8 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Home](./home.md) covers greeting, insight cards, empty state, and Last meetings.
-- [Meetings list](./meetings-list.md) covers the library, empty copy, pagination, and opening a row.
+- [Home](./home.md) covers greeting, insight cards, empty state, Last meetings, and Recent tasks.
+- [Meetings list](./meetings-list.md) covers the library, status tabs, empty copy, pagination, and opening a card.
 - [Meeting detail](./meeting-detail.md) covers video or audio playback, summary, tasks, and speaker turns.
 - [Capture](./capture.md) covers screen record, video or audio upload, and the meetings list after ingest.
 - [AskFred](./ask-fred.md) covers opening the assistant from Home, the header, and the sidebar, then sending a prompt.

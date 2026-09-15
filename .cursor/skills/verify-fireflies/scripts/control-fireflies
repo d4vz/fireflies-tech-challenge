@@ -25,6 +25,7 @@ REQUIRED_SECRETS = (
     "S3_BUCKET",
     "REDIS_URL",
     "CLERK_SECRET_KEY",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
 )
 
 # Local compose values from backend/docker-compose.yml. Used only when the
@@ -89,33 +90,38 @@ def load_dotenv(path: Path) -> dict[str, str]:
     return env
 
 
-def secrets_path() -> Path:
+def secret_files() -> list[Path]:
+    files = [
+        REPO_ROOT / ".env",
+        BACKEND_DIR / ".env",
+        BACKEND_DIR / ".env.local",
+        FRONTEND_DIR / ".env.local",
+    ]
     override = os.environ.get("FIREFLIES_VERIFY_ENV")
     if override:
-        return Path(override)
-    env_file = BACKEND_DIR / ".env"
-    if env_file.is_file():
-        return env_file
-    return BACKEND_DIR / ".env.local"
+        files.append(Path(override))
+    return files
 
 
 def load_secrets() -> dict[str, str]:
-    path = secrets_path()
-    if not path.is_file():
-        die(
-            f"missing secrets file {path}. Put backend/.env or backend/.env.local "
-            "in place, or set FIREFLIES_VERIFY_ENV to a file with OPENAI_API_KEY, "
-            "ASSEMBLYAI_API_KEY, MONGODB_URI, REDIS_URL, CLERK_SECRET_KEY, and the S3_* keys. "
-            "Do not print those values."
-        )
-    merged = dict(os.environ)
-    merged.update(load_dotenv(path))
+    merged: dict[str, str] = {}
+    for path in secret_files():
+        if path.is_file():
+            merged.update(load_dotenv(path))
+    for key, value in os.environ.items():
+        if value.strip() != "":
+            merged[key] = value
     for key, value in COMPOSE_SECRET_DEFAULTS.items():
         if merged.get(key, "").strip() == "":
             merged[key] = value
     missing = [key for key in REQUIRED_SECRETS if merged.get(key, "").strip() == ""]
     if missing:
-        die(f"secrets file {path} is missing {', '.join(missing)}")
+        die(
+            "missing "
+            + ", ".join(missing)
+            + ". Put them in backend/.env, frontend/.env.local, the process env, "
+            "or FIREFLIES_VERIFY_ENV. Do not print those values."
+        )
     return merged
 
 
@@ -347,7 +353,7 @@ def wait_http(url: str, timeout: float, ok: tuple[int, ...] = (200,)) -> tuple[i
 def compose_running() -> bool:
     try:
         out = subprocess.check_output(
-            ["docker", "compose", "-f", str(COMPOSE_FILE), "ps", "--status", "running", "--services"],
+            [*docker_cmd(), "compose", "-f", str(COMPOSE_FILE), "ps", "--status", "running", "--services"],
             cwd=BACKEND_DIR,
             text=True,
             stderr=subprocess.DEVNULL,
@@ -363,10 +369,10 @@ def ensure_compose() -> bool:
         return False
     say("starting docker compose (mongodb, redis, minio)")
     subprocess.check_call(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d", "mongodb", "redis", "minio"],
+        [*docker_cmd(), "compose", "-f", str(COMPOSE_FILE), "up", "-d", "mongodb", "redis", "minio"],
         cwd=BACKEND_DIR,
     )
-    deadline = time.time() + 90
+    deadline = time.time() + 180
     while time.time() < deadline:
         if compose_running():
             return True
@@ -377,7 +383,7 @@ def ensure_compose() -> bool:
 
 def stop_compose() -> None:
     subprocess.check_call(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "stop", "mongodb", "redis", "minio"],
+        [*docker_cmd(), "compose", "-f", str(COMPOSE_FILE), "stop", "mongodb", "redis", "minio"],
         cwd=BACKEND_DIR,
     )
 
@@ -426,7 +432,7 @@ def drop_scratch(env: dict[str, str]) -> None:
     try:
         subprocess.run(
             [
-                "docker",
+                *docker_cmd(),
                 "compose",
                 "-f",
                 str(COMPOSE_FILE),
@@ -450,7 +456,7 @@ def drop_scratch(env: dict[str, str]) -> None:
     try:
         subprocess.run(
             [
-                "docker",
+                *docker_cmd(),
                 "compose",
                 "-f",
                 str(COMPOSE_FILE),
@@ -473,10 +479,42 @@ def drop_scratch(env: dict[str, str]) -> None:
 
 
 def bun_bin() -> str:
-    found = subprocess.check_output(["which", "bun"], text=True).strip()
+    home_bun = Path.home() / ".bun/bin/bun"
+    candidates = [
+        os.environ.get("BUN_INSTALL", "") and str(Path(os.environ["BUN_INSTALL"]) / "bin/bun"),
+        str(home_bun),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    try:
+        found = subprocess.check_output(["which", "bun"], text=True).strip()
+    except subprocess.CalledProcessError:
+        found = ""
     if found == "":
-        die("bun is not on PATH")
+        die("bun is not on PATH. Install bun or put it at ~/.bun/bin/bun")
     return found
+
+
+def docker_cmd() -> list[str]:
+    sock = Path("/var/run/docker.sock")
+    if sock.exists() and os.access(sock, os.W_OK):
+        return ["docker"]
+    return ["sudo", "-n", "docker"]
+
+
+def chrome_bin() -> str:
+    for candidate in (
+        os.environ.get("CHROME_BIN", ""),
+        "/usr/local/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+    ):
+        if candidate and Path(candidate).is_file():
+            return candidate
+    die("google-chrome is not installed; needed for snapshot")
+    return ""
 
 
 def cmd_launch() -> None:
@@ -502,9 +540,11 @@ def cmd_launch() -> None:
     secrets = load_secrets()
     bun = bun_bin()
     if not (FRONTEND_DIR / "node_modules").is_dir():
-        die("frontend/node_modules is missing. Run bun install in frontend/")
+        say("bun install in frontend/")
+        subprocess.check_call([bun, "install"], cwd=FRONTEND_DIR)
     if not (BACKEND_DIR / "node_modules").is_dir():
-        die("backend/node_modules is missing. Run bun install in backend/")
+        say("bun install in backend/")
+        subprocess.check_call([bun, "install"], cwd=BACKEND_DIR)
     next_bin = FRONTEND_DIR / "node_modules/next/dist/bin/next"
     if not next_bin.is_file():
         die(f"missing {next_bin}. Run bun install in frontend/")
@@ -521,6 +561,8 @@ def cmd_launch() -> None:
     ui_env["API_URL"] = f"http://127.0.0.1:{api_port}"
     ui_env["PORT"] = str(ui_port)
     ui_env["NEXT_DIST_DIR"] = ".next-verify"
+    ui_env["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"] = secrets["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"]
+    ui_env["CLERK_SECRET_KEY"] = secrets["CLERK_SECRET_KEY"]
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     RUN_DIR.mkdir(parents=True, exist_ok=True)
@@ -764,9 +806,54 @@ def cmd_session() -> None:
     print(f"agent_task_file={AGENT_TASK_PATH}")
 
 
+def cmd_snapshot() -> None:
+    instance = read_instance()
+    feature = "home"
+    path = "/"
+    if len(sys.argv) >= 3:
+        feature = sys.argv[2]
+    if len(sys.argv) >= 4:
+        path = sys.argv[3]
+        if not path.startswith("/"):
+            die("snapshot path must start with /")
+    dest = ARTIFACTS_DIR / feature
+    dest.mkdir(parents=True, exist_ok=True)
+    ui_url = str(instance["ui_url"]).rstrip("/")
+    start_url = f"{ui_url}{path}"
+    if path == "/" and AGENT_TASK_PATH.is_file():
+        agent_url = AGENT_TASK_PATH.read_text().strip()
+        if agent_url != "":
+            start_url = agent_url
+    chrome = chrome_bin()
+    shot = dest / "shot.png"
+    aria = dest / "shot.aria.txt"
+    profile = RUN_DIR / "chrome-profile"
+    profile.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        chrome,
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--window-size=1440,900",
+        f"--user-data-dir={profile}",
+        f"--screenshot={shot}",
+        "--dump-dom",
+        "--virtual-time-budget=25000",
+        start_url,
+    ]
+    say(f"snapshot feature={feature} url={start_url}")
+    completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    aria.write_text(completed.stdout)
+    if not shot.is_file():
+        die(f"chrome did not write {shot}")
+    print(f"shot={shot}")
+    print(f"aria={aria}")
+
+
 def usage() -> None:
     die(
-        "usage: control-fireflies launch|doctor|status|session|cleanup|sample-video|sample-audio",
+        "usage: control-fireflies launch|doctor|status|session|snapshot|cleanup|sample-video|sample-audio",
         2,
     )
 
@@ -783,6 +870,8 @@ def main() -> None:
         cmd_status()
     elif command == "session":
         cmd_session()
+    elif command == "snapshot":
+        cmd_snapshot()
     elif command == "cleanup":
         cmd_cleanup()
     elif command == "sample-video":
