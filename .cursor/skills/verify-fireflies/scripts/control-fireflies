@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -574,8 +575,166 @@ def chrome_bin() -> str:
     ):
         if candidate and Path(candidate).is_file():
             return candidate
-    die("google-chrome is not installed; needed for snapshot")
+    die("google-chrome is not installed; needed for CDP browser-test")
     return ""
+
+
+def node_bin() -> str:
+    found = shutil.which("node")
+    if not found:
+        die("node is not on PATH; needed for CDP capture")
+    return found
+
+
+class CdpChrome:
+    """One Chrome process with --remote-debugging-port for cdp-capture.mjs."""
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen[bytes] | None = None
+        self.profile: Path | None = None
+        self.cdp_base = ""
+        self.log_path = RUN_DIR / "chrome-cdp.log"
+
+    def __enter__(self) -> CdpChrome:
+        self.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop()
+
+    def start(self) -> None:
+        RUN_DIR.mkdir(parents=True, exist_ok=True)
+        self.profile = RUN_DIR / f"chrome-cdp-{os.getpid()}-{time.time_ns()}"
+        self.profile.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("w") as log:
+            self.proc = subprocess.Popen(
+                [
+                    chrome_bin(),
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--remote-debugging-port=0",
+                    "--remote-debugging-address=127.0.0.1",
+                    "--remote-allow-origins=*",
+                    f"--user-data-dir={self.profile}",
+                    "--window-size=1440,900",
+                    "about:blank",
+                ],
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+            )
+        time.sleep(0.2)
+        if self.proc.poll() is not None:
+            die(f"chrome exited {self.proc.returncode}; see {self.log_path}")
+        port = self._wait_port()
+        self.cdp_base = f"http://127.0.0.1:{port}"
+        say(f"cdp {self.cdp_base}")
+
+    def _wait_port(self, timeout: float = 12) -> int:
+        assert self.profile is not None
+        marker = self.profile / "DevToolsActivePort"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.proc is not None and self.proc.poll() is not None:
+                die(f"chrome exited {self.proc.returncode} before CDP listen; see {self.log_path}")
+            if marker.is_file():
+                first = marker.read_text().splitlines()[0].strip()
+                if first.isdigit():
+                    port = int(first)
+                    try:
+                        with urllib.request.urlopen(
+                            f"http://127.0.0.1:{port}/json/version",
+                            timeout=1,
+                        ) as res:
+                            if res.status == 200:
+                                return port
+                    except OSError:
+                        pass
+            time.sleep(0.1)
+        die(f"Chrome CDP port did not come up; see {self.log_path}")
+        return 0
+
+    def stop(self) -> None:
+        if self.proc is None:
+            return
+        pid = self.proc.pid
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except OSError:
+            try:
+                self.proc.terminate()
+            except OSError:
+                pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        self.proc = None
+
+    def capture(
+        self,
+        url: str,
+        shot: Path,
+        html: Path | None = None,
+        aria: Path | None = None,
+    ) -> None:
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            node_bin(),
+            str(SCRIPT_DIR / "cdp-capture.mjs"),
+            "--cdp",
+            self.cdp_base,
+            "--url",
+            url,
+            "--shot",
+            str(shot),
+        ]
+        if html is not None:
+            cmd.extend(["--html", str(html)])
+        if aria is not None:
+            cmd.extend(["--aria", str(aria)])
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=40,
+            )
+        except subprocess.TimeoutExpired:
+            die(f"CDP capture timed out for {url}")
+        except subprocess.CalledProcessError as err:
+            detail = (err.stderr or err.stdout or "").strip()
+            if detail != "":
+                print(detail, file=sys.stderr)
+            die(f"CDP capture failed for {url}")
+        if not shot.is_file() or shot.stat().st_size < 32:
+            die(f"CDP did not write a screenshot for {url}")
+
+
+def chrome_capture(
+    url: str,
+    shot: Path,
+    html: Path | None = None,
+    aria: Path | None = None,
+    session: CdpChrome | None = None,
+) -> None:
+    if session is not None:
+        session.capture(url, shot, html, aria)
+        return
+    with CdpChrome() as cdp:
+        cdp.capture(url, shot, html, aria)
 
 
 def cmd_launch() -> None:
@@ -886,47 +1045,6 @@ def cmd_session() -> None:
     print(f"agent_task_file={AGENT_TASK_PATH}")
 
 
-def chrome_capture(url: str, shot: Path, html: Path) -> None:
-    chrome = chrome_bin()
-    profile = RUN_DIR / "chrome-profile"
-    profile.mkdir(parents=True, exist_ok=True)
-    common = [
-        chrome,
-        "--headless=new",
-        "--disable-gpu",
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--window-size=1440,900",
-        f"--user-data-dir={profile}",
-    ]
-    try:
-        subprocess.run(
-            [*common, f"--screenshot={shot}", url],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=25,
-        )
-    except subprocess.TimeoutExpired:
-        if not shot.is_file():
-            die(f"chrome screenshot timed out for {url}")
-        say(f"chrome screenshot process timed out for {url}; file kept")
-    if not shot.is_file():
-        die(f"chrome did not write {shot}")
-    try:
-        dumped = subprocess.run(
-            [*common, "--dump-dom", url],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        html.write_text(dumped.stdout)
-    except subprocess.TimeoutExpired:
-        html.write_text("chrome dump-dom timed out; screenshot kept\n")
-        say("dump-dom timed out; screenshot kept")
-
-
 def cmd_snapshot() -> None:
     instance = read_instance()
     feature = "home"
@@ -946,9 +1064,10 @@ def cmd_snapshot() -> None:
         if agent_url != "":
             start_url = agent_url
     shot = dest / "shot.png"
+    html = dest / "shot.html"
     aria = dest / "shot.aria.txt"
     say(f"snapshot feature={feature} url={start_url}")
-    chrome_capture(start_url, shot, aria)
+    chrome_capture(start_url, shot, html, aria)
     print(f"shot={shot}")
     print(f"aria={aria}")
 
@@ -963,6 +1082,7 @@ def cmd_browser_test() -> None:
     dest.mkdir(parents=True, exist_ok=True)
     problems: list[str] = []
 
+    print("harness=cdp")
     print(f"open {sign_in_url}")
     print(f"open {ui_url}/")
     print(f"open {health_url}")
@@ -980,17 +1100,39 @@ def cmd_browser_test() -> None:
     if home_status not in (301, 302, 303, 307, 308):
         problems.append(f"UI / -> {home_status} (want redirect)")
 
-    chrome_capture(sign_in_url, dest / "sign-in.png", dest / "sign-in.html")
-    chrome_capture(f"{ui_url}/", dest / "root.png", dest / "root.html")
-    try:
-        chrome_capture(health_url, dest / "health.png", dest / "health.html")
-    except SystemExit:
-        say("chrome could not finish /health; HTTP health.json is the API proof")
+    with CdpChrome() as cdp:
+        print(f"cdp={cdp.cdp_base}")
+        cdp.capture(
+            sign_in_url,
+            dest / "sign-in.png",
+            dest / "sign-in.html",
+            dest / "sign-in.aria.txt",
+        )
+        cdp.capture(
+            f"{ui_url}/",
+            dest / "root.png",
+            dest / "root.html",
+            dest / "root.aria.txt",
+        )
+        cdp.capture(
+            health_url,
+            dest / "health.png",
+            dest / "health.html",
+            dest / "health.aria.txt",
+        )
 
     title_ok = "Meetings" in sign_body or "Fireflies" in sign_body or "Sign" in sign_body
     if sign_status == 200 and not title_ok:
         html = (dest / "sign-in.html").read_text()
-        title_ok = "Meetings" in html or "Fireflies" in html or "Clerk" in html or "Sign" in html
+        aria = (dest / "sign-in.aria.txt").read_text() if (dest / "sign-in.aria.txt").is_file() else ""
+        title_ok = (
+            "Meetings" in html
+            or "Fireflies" in html
+            or "Clerk" in html
+            or "Sign" in html
+            or "Meetings" in aria
+            or "Clerk" in aria
+        )
     if not title_ok:
         problems.append("UI sign-in page did not include app or Clerk markup")
 
@@ -1000,6 +1142,7 @@ def cmd_browser_test() -> None:
             [
                 "# Stack browser test",
                 "",
+                "- harness: cdp",
                 f"- ui_url: {ui_url}",
                 f"- sign_in_url: {sign_in_url}",
                 f"- health_url: {health_url}",

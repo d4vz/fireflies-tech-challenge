@@ -1,15 +1,15 @@
 ---
 name: verify-fireflies
 description: >-
-  Verify the Fireflies app by running the backend and frontend, opening their
-  ports in a real browser, and checking that the UI and API answer. Reach for
-  this to launch the stack, doctor it, browser-test sign-in plus /health, and
-  keep screenshots after cleanup.
+  Verify the Fireflies app by running the backend and frontend, then driving
+  their ports over Chrome DevTools Protocol. Reach for this to launch the
+  stack, doctor it, CDP-capture sign-in plus /health, and keep screenshots
+  after cleanup.
 ---
 
 # Verify Fireflies
 
-Start the Hono API and the Next.js UI, then open their links in Chrome. Prove the server and the UI answer. Do not treat a curl-only check as the browser test.
+Start the Hono API and the Next.js UI, then drive their links over Chrome DevTools Protocol. Prove the server and the UI answer. Do not treat a curl-only check as the browser test. Chrome `--screenshot` / `--dump-dom` is not CDP.
 
 The helper is `.cursor/skills/verify-fireflies/scripts/control-fireflies`. Run it from any cwd.
 
@@ -20,7 +20,7 @@ The helper is `.cursor/skills/verify-fireflies/scripts/control-fireflies`. Run i
 .cursor/skills/verify-fireflies/scripts/control-fireflies cleanup
 ```
 
-`browser-test` is the default proof. It opens:
+`browser-test` is the default proof. It starts system Chrome with `--remote-debugging-port` and runs `scripts/cdp-capture.mjs` (Node 22 WebSocket). CDP methods: `Page.navigate`, `Page.captureScreenshot`, `Runtime.evaluate`, `Accessibility.getFullAXTree`. It opens:
 
 - UI: `http://localhost:8080/` and `http://localhost:8080/sign-in`
 - API: `http://127.0.0.1:3000/health`
@@ -74,7 +74,9 @@ If doctor fails, read `.run/api.log` and `.run/ui.log`, then cleanup and relaunc
 
 ## Drive
 
-Default harness: `control-fireflies browser-test` (system Chrome against the printed links). It writes `artifacts/stack/`.
+Default harness: `control-fireflies browser-test` (Chrome CDP against the printed links). It writes `artifacts/stack/`.
+
+The CDP client is `scripts/cdp-capture.mjs`. Prove it without the app via `scripts/test_cdp_harness.py`.
 
 For a signed-in feature, use Cursor `browser_*` tools against `ui_url`, or `snapshot <feature-id>`. Viewport 1440x900. Handles are in the feature files.
 
@@ -92,14 +94,14 @@ Write under `.cursor/skills/verify-fireflies/artifacts/<feature-id>/`. Cleanup l
 
 Stack proof (`artifacts/stack/`):
 
-- `notes.md` with the opened links
-- `health.json` plus `health.png` of `/health`
-- `sign-in.png` of `/sign-in`
-- `root.png` of `/` after the sign-in redirect
+- `notes.md` with `harness: cdp` and the opened links
+- `health.json` plus `health.png` / `health.html` / `health.aria.txt` of `/health`
+- `sign-in.png` / `sign-in.html` / `sign-in.aria.txt` of `/sign-in`
+- `root.png` / `root.html` / `root.aria.txt` of `/` after the sign-in redirect
 
 Proof standards:
 
-- The browser opened the UI and health URLs. HTTP-only is not enough for `browser-test`.
+- Chrome CDP opened the UI and health URLs. HTTP-only is not enough for `browser-test`.
 - Blob `ok` proves the API process and MinIO. Transcribe `ok` is extra.
 - A Clerk `host_invalid` page still counts as UI-up if Next returned 200 and Chrome captured it.
 
