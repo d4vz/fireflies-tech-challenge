@@ -6,6 +6,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 - Launch with `.cursor/skills/verify-fireflies/scripts/control-fireflies launch`.
 - Doctor must print `doctor=ok` for `http://localhost:18080` (or `FIREFLIES_UI_PORT`) and `http://127.0.0.1:13000` (or `FIREFLIES_API_PORT`).
+- Sign in through `/sign-in` with the Clerk test email or phone from `.run/login.json` and OTP `424242` before any protected route. See [Sign-in](./sign-in.md).
 - Mongo database is `fireflies_verify`. It starts empty unless a feature seeds it through the UI or the Next upload route.
 - Viewport 1440x900 (`Emulation.setDeviceMetricsOverride`).
 - Never open `http://127.0.0.1:8080`, `http://localhost:8080`, or `http://127.0.0.1:3000`.
@@ -17,14 +18,16 @@ This directory is the maintained source for verifying the user-facing behavior o
 - Prefer accessible names from `browser_snapshot` over CSS and coordinates.
 - Treat every command as literal. Keep quoted names unchanged.
 - Run process actions through `control-fireflies`.
-- Run browser actions through Cursor `browser_*` tools against `ui_url`.
+- Run browser actions through Cursor `browser_*` tools or the cloud `computerUse` agent against `ui_url`.
 - After a mutation, restore the empty verify database with `cleanup` only at the end of the whole run, not between proof screenshots.
 
 ## Proof and skip reporting
 
 - Capture the user action and the resulting state, not only the final screen.
-- UI proof includes an ARIA snapshot and a screenshot with `Davi` or the page heading visible.
+- UI proof includes an ARIA snapshot and a screenshot with `Verify` or the page heading visible.
+- Login proof is the SignIn form plus OTP, then Home. A JWT is not login proof.
 - Mutation proof includes a second read of the meetings list or detail.
+- Cloud agents record login and each mutation to `artifacts/<feature-id>/` and copy the user-facing video to `/opt/cursor/artifacts` for the pull request.
 - Record the feature ID and entry point in `artifacts/<feature-id>/notes.md`.
 - Report an unreachable path with the attempted command and the unmet precondition.
 - Do not report a skipped entry point as verified through a different path.
@@ -42,6 +45,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
+- [Sign-in](./sign-in.md) covers the unsigned gate, Clerk test email or phone, OTP `424242`, and the Home landing.
 - [Home](./home.md) covers greeting, insight cards, empty state, and Last meetings.
 - [Meetings list](./meetings-list.md) covers the library, empty copy, pagination, and opening a row.
 - [Meeting detail](./meeting-detail.md) covers video or audio playback, summary, tasks, and speaker turns.

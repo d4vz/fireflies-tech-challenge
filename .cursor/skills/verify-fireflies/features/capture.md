@@ -5,8 +5,8 @@ Capture adds a meeting by recording the screen or uploading a video or audio fil
 ## Sub-features
 
 - `capture-record` starts a screen recording from the `Capture` button and stops with `Stop`.
-- `capture-upload` opens the chevron menu, chooses `Upload`, and sends a file from the name dialog dropzone.
-- `capture-busy` shows `uploading` in the header and disables Capture while the POST is in flight.
+- `capture-upload` opens the chevron menu, chooses `Upload`, and sends a file from the Create a meeting dialog dropzone.
+- `capture-busy` sets Capture `aria-busy=true` and shows a spinner while the POST is in flight.
 - `capture-error` shows the error string next to Capture when the upload fails.
 - `capture-list` shows a row whose `name` is the filename stem after ingest (open `/meetings` or the toast link).
 
@@ -21,19 +21,20 @@ Capture adds a meeting by recording the screen or uploading a video or audio fil
 Preconditions:
 
 - `control-fireflies doctor` reports `doctor=ok`.
+- Sign-in has completed.
 - Viewport is 1440x900 so the `Capture` label is visible (`md+`).
 - A 2s mp4 exists. Create it with `.cursor/skills/verify-fireflies/scripts/control-fireflies sample-video` and read the printed path.
 - A 2s mp3 exists. Create it with `.cursor/skills/verify-fireflies/scripts/control-fireflies sample-audio` and read the printed path.
 - The OS may show a display-picker or file-picker the browser tools cannot complete. Follow the fallback in the later bullets rather than calling Hono on the API port.
 
 - **Upload menu.** Choose the chevron. Run `browser_click` the button named `Upload` (`aria-label`). A menu item named `Upload` appears.
-- **Name dialog.** Choose menu `Upload`. A dialog titled `Meeting name` opens. The dropzone copy is `Drop a video or audio file, or click to browse`. Supported files include `.mp4` and `.mp3`.
+- **Name dialog.** Choose menu `Upload`. A dialog titled `Create a meeting` opens. The dropzone copy is `Drop a video or audio file, or click to browse`. Supported files include `.mp4` and `.mp3`.
 - **Choose file.** If `browser_fill` can set the dropzone file input to a sample path, do that, type a name, then confirm `Upload`.
 - **Fallback when the file chooser is native.** POST the sample bytes to `<ui_url>/api/meetings/upload?filename=verify-sample.mp4` with `Content-Type: video/mp4` and `Authorization: Bearer` from `.run/session.jwt`. A `Cookie: __session=` POST to Next redirects to Clerk sign-in. Expect 201 JSON with `_id`, `sourceId`, and `blob.kind` `video`. POST `<ui_url>/api/meetings/upload?filename=verify-sample.mp3` with `Content-Type: audio/mpeg` and the same Bearer header. Expect 201 and `blob.kind` `audio`. These are the same Next route the dialog uses. Then `browser_navigate` to `<ui_url>/meetings`.
-- **Header while uploading.** The header shows `uploading` and Capture is `aria-busy=true` during a UI POST. After success a toast shows processing copy and a `View meeting` link. The current route stays put.
+- **Header while uploading.** Capture is `aria-busy=true` and shows a spinner during a UI POST. There is no visible `uploading` label. After success a toast shows processing copy and a `View meeting` link. The current route stays put.
 - **List result.** `/meetings` is no longer the empty copy. A video row heading matches `verify-sample`. An audio row heading matches `verify-sample` and the link name starts with `Audio recording`. Status starts as `Queued` or `Processing` (tiny samples may already be `Ready`). A 2s sine sample can be `Ready` with an empty transcript; that is ingest proof, not speaker-rail proof.
 - **Second read.** Reload `/meetings` or `GET <ui_url>/api/meetings?page=1&limit=5`. Both `_id`s are still present. Save JSON as `artifacts/capture/meetings.json`.
-- **Screen record path.** Choose `Capture`. A dialog titled `Meeting name` opens. Type a name, then choose `Start capture`. The header button becomes `Stop` and the header shows `recording` if `getDisplayMedia` is allowed. If the browser permission prompt appears, stop and record `capture-record` as blocked with that prompt, not as failed product behavior.
+- **Screen record path.** Choose `Capture`. A dialog titled `Create a meeting` opens. Type a name, then choose `Start capture`. The header button becomes `Stop` if `getDisplayMedia` is allowed. There is no visible `recording` label. If the browser permission prompt appears, stop and record `capture-record` as blocked with that prompt, not as failed product behavior.
 - **Proof.** `artifacts/capture/dialog.png` shows the dropzone and audio extensions. `artifacts/capture/list` proof shows both rows on `/meetings`. Include both upload status codes in `notes.md`.
 
 ## Gotchas
