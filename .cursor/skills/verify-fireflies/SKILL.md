@@ -73,8 +73,8 @@ Sign in before any protected route. Every feature except `sign-in` starts after 
 
 1. `browser_tabs` action `list`. Reuse a tab only if its URL is already this `ui_url`.
 2. Run `control-fireflies login`. Read `login_file` and `hook_file` (do not print them). The OTP is always `424242`.
-3. Inject the hook **before** Clerk Frontend API calls. Prefer CDP `Page.addScriptToEvaluateOnNewDocument` with the hook file contents, then `browser_navigate` to `login_url`. If you can only evaluate after load, evaluate the hook, reload `/sign-in`, then type. The hook appends `__clerk_testing_token` on Clerk FAPI requests so bot detection does not block the form.
-4. On `/sign-in`, fill the identifier with `email` from `login.json`, choose `Continue`, enter `424242`. If the form offers phone instead, use `phone` from that file and the same OTP. Wait until the heading is `Home` and the greeting includes `Verify`.
+3. Inject the hook **before** Clerk Frontend API calls. Prefer CDP `Page.addScriptToEvaluateOnNewDocument` with the hook file contents, then `browser_navigate` to `login_url`. Cloud Chrome needs `--remote-debugging-port=9222 --remote-allow-origins=*`. If you can only evaluate after load, evaluate the hook, reload `/sign-in`, then type. The hook appends `__clerk_testing_token` on Clerk FAPI requests so bot detection does not block the form.
+4. On `/sign-in`, fill the textbox named `Email address` with `email` from `login.json`. Choose the button whose name is exactly `Continue`. Do not choose `Continue with Google`. On `/sign-in/factor-one` (`Check your email`), fill `Enter verification code` with `424242`. Wait until the heading is `Home` and the greeting includes `Verify`.
 5. `browser_lock` action `lock` after login, or keep the `computerUse` session on this `ui_url`.
 6. Set the viewport to 1440x900 (`Emulation.setDeviceMetricsOverride` or an equivalent window size). Sidebar nav, Capture label, and the transcript rail (`lg`) need this width. AskFred is a right sheet at every width.
 7. `browser_snapshot` and click by `ref` using the accessible name from the feature file.
