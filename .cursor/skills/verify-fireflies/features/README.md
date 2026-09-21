@@ -48,6 +48,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Sign-in](./sign-in.md) covers the unsigned gate, Clerk test email or phone, OTP `424242`, and the Home landing.
 - [Home](./home.md) covers greeting, insight cards, empty state, and Last meetings.
 - [Meetings list](./meetings-list.md) covers the library, empty copy, pagination, and opening a row.
+- [Meeting search](./meeting-search.md) covers the header `Search meetings` box and the dropdown of meeting cards it opens on the current page.
 - [Meeting detail](./meeting-detail.md) covers video or audio playback, summary, tasks, and speaker turns.
 - [Capture](./capture.md) covers screen record, video or audio upload, and the meetings list after ingest.
 - [AskFred](./ask-fred.md) covers opening the assistant from Home, the header, and the sidebar, then sending a prompt.
