@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import signal
@@ -47,11 +48,15 @@ REPO_ROOT = SKILL_DIR.parent.parent.parent
 RUN_DIR = SKILL_DIR / ".run"
 INSTANCE_PATH = RUN_DIR / "instance.json"
 SESSION_JWT_PATH = RUN_DIR / "session.jwt"
-AGENT_TASK_PATH = RUN_DIR / "agent-task.url"
+LOGIN_PATH = RUN_DIR / "login.json"
+TESTING_TOKEN_PATH = RUN_DIR / "testing.token"
+HOOK_PATH = RUN_DIR / "clerk-hook.js"
 ARTIFACTS_DIR = SKILL_DIR / "artifacts"
 CLERK_API = "https://api.clerk.com/v1"
 CLERK_UA = "Mozilla/5.0 (compatible; verify-fireflies/1.0)"
 VERIFY_DISPLAY_NAME = "Verify"
+VERIFY_OTP = "424242"
+TESTING_TOKEN_PARAM = "__clerk_testing_token"
 BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 COMPOSE_FILE = BACKEND_DIR / "docker-compose.yml"
@@ -245,7 +250,13 @@ def http_get(
         return 0, str(error)
 
 
-def clerk_request(secret_key: str, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+def clerk_request(
+    secret_key: str,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    allow_error: bool = False,
+) -> dict[str, Any]:
     payload = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(
         f"{CLERK_API}{path}",
@@ -262,7 +273,7 @@ def clerk_request(secret_key: str, method: str, path: str, body: dict[str, Any] 
         with urllib.request.urlopen(request, timeout=20) as response:
             raw = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as error:
-        if method == "DELETE":
+        if method == "DELETE" or allow_error:
             return {}
         die(f"Clerk {method} {path} -> {error.code}")
     if raw == "":
@@ -273,8 +284,130 @@ def clerk_request(secret_key: str, method: str, path: str, body: dict[str, Any] 
     return parsed
 
 
-def create_clerk_verify_session(secret_key: str, redirect_url: str) -> dict[str, str]:
-    email = f"verify-{int(time.time())}@example.com"
+def unique_test_email() -> str:
+    return f"verify-{int(time.time())}+clerk_test@example.com"
+
+
+def unique_test_phone() -> str:
+    suffix = 100 + (int(time.time()) % 100)
+    return f"+1201555{suffix:04d}"
+
+
+def clerk_fapi_host(publishable_key: str) -> str:
+    parts = publishable_key.split("_", 2)
+    if len(parts) < 3 or parts[0] != "pk":
+        return ""
+    raw = parts[2].strip()
+    pad = "=" * ((4 - len(raw) % 4) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(raw + pad).decode("ascii")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    host = decoded.rstrip("$").strip()
+    if host.startswith("http://") or host.startswith("https://"):
+        host = urllib.parse.urlparse(host).hostname or ""
+    return host
+
+
+def load_publishable_key() -> str:
+    for path in (FRONTEND_DIR / ".env.local", FRONTEND_DIR / ".env"):
+        if not path.is_file():
+            continue
+        value = load_dotenv(path).get("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "").strip()
+        if value:
+            return value
+    return os.environ.get("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "").strip()
+
+
+def create_testing_token(secret_key: str) -> str:
+    payload = clerk_request(secret_key, "POST", "/testing_tokens")
+    token = str(payload.get("token", ""))
+    if token == "":
+        die("Clerk testing token did not return a token")
+    return token
+
+
+def write_clerk_hook(token: str, fapi_host: str) -> None:
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    host_js = json.dumps(fapi_host)
+    token_js = json.dumps(token)
+    param_js = json.dumps(TESTING_TOKEN_PARAM)
+    HOOK_PATH.write_text(
+        f"""(() => {{
+  const token = {token_js};
+  const param = {param_js};
+  const fapiHost = {host_js};
+  const rewrite = (value) => {{
+    try {{
+      const url = new URL(String(value), globalThis.location?.href ?? "http://localhost");
+      const host = url.hostname;
+      const match =
+        (fapiHost !== "" && host === fapiHost) ||
+        host.endsWith(".clerk.accounts.dev") ||
+        host.includes("clerk");
+      if (!match) {{
+        return String(value);
+      }}
+      url.searchParams.set(param, token);
+      return url.toString();
+    }} catch {{
+      return String(value);
+    }}
+  }};
+  const origFetch = globalThis.fetch;
+  if (typeof origFetch === "function") {{
+    globalThis.fetch = function (input, init) {{
+      if (typeof input === "string") {{
+        return origFetch.call(this, rewrite(input), init);
+      }}
+      if (typeof Request !== "undefined" && input instanceof Request) {{
+        const next = rewrite(input.url);
+        if (next !== input.url) {{
+          return origFetch.call(this, new Request(next, input), init);
+        }}
+      }}
+      return origFetch.call(this, input, init);
+    }};
+  }}
+  const xhr = globalThis.XMLHttpRequest && globalThis.XMLHttpRequest.prototype;
+  if (xhr && typeof xhr.open === "function") {{
+    const origOpen = xhr.open;
+    xhr.open = function (method, url, ...rest) {{
+      return origOpen.call(this, method, rewrite(url), ...rest);
+    }};
+  }}
+}})();
+"""
+    )
+
+
+def write_login_bundle(session: dict[str, str], secret_key: str) -> None:
+    token = create_testing_token(secret_key)
+    fapi_host = clerk_fapi_host(load_publishable_key())
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    LOGIN_PATH.write_text(
+        json.dumps(
+            {
+                "email": session["email"],
+                "phone": session["phone"],
+                "otp": session["otp"],
+                "display_name": session["display_name"],
+                "fapi_host": fapi_host,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    TESTING_TOKEN_PATH.write_text(token)
+    write_clerk_hook(token, fapi_host)
+    jwt = session.get("jwt", "").strip()
+    if jwt:
+        SESSION_JWT_PATH.write_text(jwt)
+
+
+def create_clerk_verify_user(secret_key: str) -> dict[str, str]:
+    email = unique_test_email()
+    phone = unique_test_phone()
     user_id = ""
     try:
         user = clerk_request(
@@ -283,40 +416,47 @@ def create_clerk_verify_session(secret_key: str, redirect_url: str) -> dict[str,
             "/users",
             {
                 "email_address": [email],
+                "phone_number": [phone],
                 "first_name": VERIFY_DISPLAY_NAME,
                 "skip_password_requirement": True,
             },
+            allow_error=True,
         )
         user_id = str(user.get("id", ""))
+        if user_id == "":
+            phone = ""
+            user = clerk_request(
+                secret_key,
+                "POST",
+                "/users",
+                {
+                    "email_address": [email],
+                    "first_name": VERIFY_DISPLAY_NAME,
+                    "skip_password_requirement": True,
+                },
+            )
+            user_id = str(user.get("id", ""))
         if user_id == "":
             die("Clerk create user did not return an id")
         session = clerk_request(secret_key, "POST", "/sessions", {"user_id": user_id})
         session_id = str(session.get("id", ""))
         if session_id == "":
             die("Clerk create session did not return an id")
-        token = clerk_request(secret_key, "POST", f"/sessions/{session_id}/tokens", {"expires_in_seconds": 3600})
+        token = clerk_request(
+            secret_key,
+            "POST",
+            f"/sessions/{session_id}/tokens",
+            {"expires_in_seconds": 3600},
+        )
         jwt = str(token.get("jwt", ""))
         if jwt == "":
             die("Clerk session token did not return a jwt")
-        task = clerk_request(
-            secret_key,
-            "POST",
-            "/agents/tasks",
-            {
-                "on_behalf_of": {"user_id": user_id},
-                "permissions": "*",
-                "agent_name": "verify-fireflies",
-                "task_description": "open the signed-in app",
-                "redirect_url": redirect_url,
-            },
-        )
-        agent_url = str(task.get("url", ""))
-        if agent_url == "":
-            die("Clerk agent task did not return a url")
         return {
             "user_id": user_id,
             "jwt": jwt,
-            "agent_url": agent_url,
+            "email": email,
+            "phone": phone,
+            "otp": VERIFY_OTP,
             "display_name": VERIFY_DISPLAY_NAME,
         }
     except BaseException:
@@ -554,11 +694,10 @@ def cmd_launch() -> None:
             die(f"UI exited. See {ui_log}")
         ui_url = f"http://localhost:{ui_port}"
         wait_http(f"{ui_url}/sign-in", timeout=90)
-        say("creating Clerk verify session")
-        session = create_clerk_verify_session(secrets["CLERK_SECRET_KEY"], f"{ui_url}/")
+        say("creating Clerk test user")
+        session = create_clerk_verify_user(secrets["CLERK_SECRET_KEY"])
         clerk_user_id = session["user_id"]
-        SESSION_JWT_PATH.write_text(session["jwt"])
-        AGENT_TASK_PATH.write_text(session["agent_url"])
+        write_login_bundle(session, secrets["CLERK_SECRET_KEY"])
         write_instance(
             {
                 "ui_pid": ui_pid,
@@ -581,14 +720,16 @@ def cmd_launch() -> None:
             if clerk_user_id:
                 delete_clerk_user(secrets["CLERK_SECRET_KEY"], clerk_user_id)
             SESSION_JWT_PATH.unlink(missing_ok=True)
-            AGENT_TASK_PATH.unlink(missing_ok=True)
+            LOGIN_PATH.unlink(missing_ok=True)
+            TESTING_TOKEN_PATH.unlink(missing_ok=True)
+            HOOK_PATH.unlink(missing_ok=True)
             kill_pid(ui_pid)
             kill_pid(api_pid)
             if started_compose:
                 stop_compose()
 
     say(f"ready UI={ui_port} API={api_port} pids ui={ui_pid} api={api_pid}")
-    say(f"display_name={VERIFY_DISPLAY_NAME} session=ready")
+    say(f"display_name={VERIFY_DISPLAY_NAME} login=clerk_test")
 
 
 def cmd_doctor() -> None:
@@ -632,6 +773,30 @@ def cmd_doctor() -> None:
     if unsigned_meetings not in (401, 302, 303, 307, 308):
         problems.append(f"GET {ui_url}/api/meetings without session -> {unsigned_meetings}")
 
+    login: dict[str, Any] = {}
+    if not LOGIN_PATH.is_file():
+        problems.append("missing Clerk login file; re-run launch")
+    else:
+        try:
+            parsed_login = json.loads(LOGIN_PATH.read_text())
+        except json.JSONDecodeError:
+            parsed_login = None
+        if not isinstance(parsed_login, dict):
+            problems.append("login file is not JSON")
+        else:
+            login = parsed_login
+            email = str(login.get("email", ""))
+            if "+clerk_test" not in email:
+                problems.append("login email is missing +clerk_test")
+            if str(login.get("otp", "")) != VERIFY_OTP:
+                problems.append(f"login otp is not {VERIFY_OTP}")
+            if str(login.get("display_name", "")) != VERIFY_DISPLAY_NAME:
+                problems.append("login display_name is not Verify")
+    if not TESTING_TOKEN_PATH.is_file() or TESTING_TOKEN_PATH.read_text().strip() == "":
+        problems.append("missing Clerk testing token; re-run launch or login")
+    if not HOOK_PATH.is_file() or HOOK_PATH.read_text().strip() == "":
+        problems.append("missing Clerk testing-token hook; re-run launch or login")
+
     jwt = SESSION_JWT_PATH.read_text().strip() if SESSION_JWT_PATH.is_file() else ""
     if jwt == "":
         problems.append("missing Clerk session jwt; re-run launch")
@@ -663,6 +828,8 @@ def cmd_doctor() -> None:
     print(f"redis_db={instance.get('redis_db')}")
     print(f"started_compose={instance.get('started_compose')}")
     print(f"display_name={instance.get('display_name')}")
+    print("login=clerk_test" if "+clerk_test" in str(login.get("email", "")) else "login=missing")
+    print("hook=ready" if HOOK_PATH.is_file() else "hook=missing")
     print("session=ready" if SESSION_JWT_PATH.is_file() else "session=missing")
     print(f"artifacts={ARTIFACTS_DIR}")
     if problems:
@@ -705,7 +872,9 @@ def cmd_cleanup() -> None:
         stop_compose()
     INSTANCE_PATH.unlink(missing_ok=True)
     SESSION_JWT_PATH.unlink(missing_ok=True)
-    AGENT_TASK_PATH.unlink(missing_ok=True)
+    LOGIN_PATH.unlink(missing_ok=True)
+    TESTING_TOKEN_PATH.unlink(missing_ok=True)
+    HOOK_PATH.unlink(missing_ok=True)
     say(f"cleanup done; artifacts kept at {ARTIFACTS_DIR}")
 
 
@@ -756,17 +925,38 @@ def cmd_sample_audio() -> None:
     print(str(dest))
 
 
-def cmd_session() -> None:
+def cmd_login() -> None:
     instance = read_instance()
+    secrets = load_secrets()
+    if not LOGIN_PATH.is_file():
+        die("missing login file. Run launch first.", 2)
+    try:
+        existing = json.loads(LOGIN_PATH.read_text())
+    except json.JSONDecodeError:
+        die("login file is not JSON", 2)
+    if not isinstance(existing, dict):
+        die("login file is not JSON", 2)
+    write_login_bundle(
+        {
+            "email": str(existing.get("email", "")),
+            "phone": str(existing.get("phone", "")),
+            "otp": VERIFY_OTP,
+            "display_name": str(instance.get("display_name", VERIFY_DISPLAY_NAME)),
+            "jwt": SESSION_JWT_PATH.read_text() if SESSION_JWT_PATH.is_file() else "",
+        },
+        secrets["CLERK_SECRET_KEY"],
+    )
     print(f"display_name={instance.get('display_name', VERIFY_DISPLAY_NAME)}")
-    print("cookie_name=__session")
+    print(f"otp={VERIFY_OTP}")
+    print(f"login_url={instance['ui_url']}/sign-in")
+    print(f"login_file={LOGIN_PATH}")
+    print(f"hook_file={HOOK_PATH}")
     print(f"cookie_file={SESSION_JWT_PATH}")
-    print(f"agent_task_file={AGENT_TASK_PATH}")
 
 
 def usage() -> None:
     die(
-        "usage: control-fireflies launch|doctor|status|session|cleanup|sample-video|sample-audio",
+        "usage: control-fireflies launch|doctor|status|login|session|cleanup|sample-video|sample-audio",
         2,
     )
 
@@ -781,8 +971,8 @@ def main() -> None:
         cmd_doctor()
     elif command == "status":
         cmd_status()
-    elif command == "session":
-        cmd_session()
+    elif command in ("login", "session"):
+        cmd_login()
     elif command == "cleanup":
         cmd_cleanup()
     elif command == "sample-video":

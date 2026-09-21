@@ -2,20 +2,23 @@
 name: verify-fireflies
 description: >-
   Verify the Fireflies Next.js meeting UI in a real browser. Reach for this
-  to launch an isolated local stack, doctor that instance, drive Home /
-  Meetings / detail / Capture / AskFred as a user would, and keep proof
-  artifacts after cleanup.
+  to launch an isolated local stack, doctor that instance, sign in through
+  Clerk with a test email or phone, drive Home / Meetings / detail / Capture /
+  AskFred / Tasks as a user would, and keep proof artifacts after cleanup.
 ---
 
 # Verify Fireflies
 
 Drive the Next.js UI the way a user does. Do not call Hono on port 3000 from the browser, and do not open `http://127.0.0.1:8080` or `http://localhost:8080` (that is the operator's session). Clerk's development handshake hangs on `127.0.0.1`, so the UI binds `localhost`.
 
+You must sign in through `/sign-in`. Do not open an agent-task URL. Do not set `__session` as a stand-in for login.
+
 The helper is `.cursor/skills/verify-fireflies/scripts/control-fireflies`. Run it from any cwd.
 
 ```
 .cursor/skills/verify-fireflies/scripts/control-fireflies launch
 .cursor/skills/verify-fireflies/scripts/control-fireflies doctor
+.cursor/skills/verify-fireflies/scripts/control-fireflies login
 .cursor/skills/verify-fireflies/scripts/control-fireflies cleanup
 ```
 
@@ -32,7 +35,7 @@ Launch starts a **new** UI and API on unoccupied ports:
 | Next.js UI | `FIREFLIES_UI_PORT` or 18080 | own process on `localhost`, `API_URL=http://127.0.0.1:<api-port>` |
 | Hono API | `FIREFLIES_API_PORT` or 13000 | own process, Mongo DB `fireflies_verify`, Redis DB 15, bucket `fireflies-verify` |
 
-Ready when `GET http://127.0.0.1:<api-port>/health` is 200 with `"status":"ok"` and `GET http://localhost:<ui-port>/sign-in` is 200. Launch then creates a Clerk verify user (`first_name` `Verify`), writes a session JWT to `.run/session.jwt`, and writes a one-time agent-task URL to `.run/agent-task.url`. Do not print those files. Logs live in `.cursor/skills/verify-fireflies/.run/`.
+Ready when `GET http://127.0.0.1:<api-port>/health` is 200 with `"status":"ok"` and `GET http://localhost:<ui-port>/sign-in` is 200. Launch then creates a Clerk development test user (`first_name` `Verify`, email with `+clerk_test`, optional fictional `+1XXX55501xx` phone). It writes `.run/login.json`, a Clerk testing token, `.run/clerk-hook.js`, and a session JWT to `.run/session.jwt`. The JWT is for doctor and the Capture upload fallback only. Do not print those files. Logs live in `.cursor/skills/verify-fireflies/.run/`.
 
 Secrets come from `backend/.env`, then `backend/.env.local`, or `$FIREFLIES_VERIFY_ENV`. `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, and `CLERK_SECRET_KEY` are required. AssemblyAI is the default transcribe vendor in `backend/config.yaml`. If Mongo / Redis / MinIO keys are absent, launch fills the values published in `backend/docker-compose.yml`. Need `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` only when they differ from that compose file. Do not print secrets. `/health` pings the configured transcribe vendor and creates the verify MinIO bucket.
 
@@ -58,20 +61,26 @@ It is worth driving only when stdout ends with `doctor=ok` and includes:
 - `GET <ui_url>/` without a session redirects to sign-in
 - `GET <ui_url>/api/meetings?page=1&limit=5` without a session is 401 or a sign-in redirect
 - `GET <api_url>/meetings?page=1&limit=5` with `Authorization: Bearer <jwt from .run/session.jwt>` 200 JSON with `items`
-- `display_name=Verify` and `session=ready`
+- `display_name=Verify`, `login=clerk_test`, `hook=ready`, and `session=ready`
 
 If doctor fails, read `.run/api.log` and `.run/ui.log`, then cleanup and relaunch. Do not fall back to :8080 or :3000.
 
 ## Drive
 
-Harness: Cursor browser tools (`cursor-ide-browser`) against `ui_url` from doctor. If those tools do not register, drive Chrome against the same `ui_url` and still write artifacts under `artifacts/<feature-id>/`.
+Harness: Cursor browser tools (`cursor-ide-browser`) or the cloud `computerUse` agent against `ui_url` from doctor. If IDE browser tools do not register, drive Chrome against the same `ui_url` and still write artifacts under `artifacts/<feature-id>/`.
+
+Sign in before any protected route. Every feature except `sign-in` starts after a completed OTP.
 
 1. `browser_tabs` action `list`. Reuse a tab only if its URL is already this `ui_url`.
-2. Run `control-fireflies session`. Read `agent_task_file` (do not print it). `browser_navigate` to that URL so Clerk sets cookies and lands on Home. If that URL is spent, set `__session` from `cookie_file` with `browser_cdp` `Network.setCookie` (`name` `__session`, `url` `ui_url`, `httpOnly` true, `secure` false), then `browser_navigate` to `ui_url`.
-3. `browser_lock` action `lock`.
-4. `browser_cdp` method `Emulation.setDeviceMetricsOverride` with `width` 1440, `height` 900, `deviceScaleFactor` 1, `mobile` false. Sidebar nav, Capture label, and the AskFred dock (`xl`) need this width. 1024 shows AskFred as a sheet and hides the dock.
-5. `browser_snapshot` and click by `ref` using the accessible name from the feature file.
-6. `browser_lock` action `unlock` when the run is finished.
+2. Run `control-fireflies login`. Read `login_file` and `hook_file` (do not print them). The OTP is always `424242`.
+3. Inject the hook **before** Clerk Frontend API calls. Prefer CDP `Page.addScriptToEvaluateOnNewDocument` with the hook file contents, then `browser_navigate` to `login_url`. Cloud Chrome needs `--remote-debugging-port=9222 --remote-allow-origins=*`. If you can only evaluate after load, evaluate the hook, reload `/sign-in`, then type. The hook appends `__clerk_testing_token` on Clerk FAPI requests so bot detection does not block the form.
+4. On `/sign-in`, fill the textbox named `Email address` with `email` from `login.json`. Choose the button whose name is exactly `Continue`. Do not choose `Continue with Google`. On `/sign-in/factor-one` (`Check your email`), fill `Enter verification code` with `424242`. Wait until the heading is `Home` and the greeting includes `Verify`.
+5. `browser_lock` action `lock` after login, or keep the `computerUse` session on this `ui_url`.
+6. Set the viewport to 1440x900 (`Emulation.setDeviceMetricsOverride` or an equivalent window size). Sidebar nav, Capture label, and the transcript rail (`lg`) need this width. AskFred is a right sheet at every width.
+7. `browser_snapshot` and click by `ref` using the accessible name from the feature file.
+8. `browser_lock` action `unlock` when the run is finished.
+
+Cloud agents record the login and each mutation with `RecordScreen`. Start the recording after doctor is green and the sign-in page is ready. Save under `artifacts/<feature-id>/` and also copy the user-facing video to `/opt/cursor/artifacts` so the pull request can embed it. Do not record compose, install, or a failed attempt.
 
 Stable handles (from the running UI, not CSS):
 
@@ -79,8 +88,9 @@ Stable handles (from the running UI, not CSS):
 | --- | --- | --- |
 | `Home` | link, `aria-current=page` on `/` | sidebar |
 | `Meetings` | link | sidebar |
+| `Tasks` | link | sidebar |
 | `AskFred` | link in sidebar; link `aria-label=AskFred` in the header | both |
-| `Capture` | button | header. Opens the Meeting name dialog, then screen recording. Not file upload. |
+| `Capture` | button | header. Opens the Create a meeting dialog, then screen recording. Not file upload. |
 | `Upload` | button `aria-label=Upload` | header chevron, then menu item `Upload` |
 | `Close AskFred` | link | AskFred panel |
 | `Ask Fred` | textbox | AskFred composer. Placeholder `Ask anything here`. |
@@ -90,7 +100,7 @@ Stable handles (from the running UI, not CSS):
 | `Open navigation` | button | header, below md |
 | `Transcript` | button | meeting detail, below lg |
 
-Document title is `Meetings`. Sidebar brand is the Fireflies wordmark. Greeting on Home is `Good Morning, Verify`, `Good Afternoon, Verify`, or `Good Evening, Verify` from local time (`Verify` is the launch-created Clerk first name). Unsigned `/` redirects to `/sign-in`, which mounts Clerk's default `<SignIn />`. Empty Home and list copy is `Capture your first meeting` with `No meetings yet. Capture or upload a file to start.` Buttons `Capture a meeting` and `Upload a recording` open the same Capture naming dialog as the header. Status chips are `Queued`, `Processing`, `Ready`, `Failed`. Audio rows include sr-only `Audio recording` in the link name.
+Document title is `Meetings`. Sidebar brand is the Fireflies wordmark. Greeting on Home is `Good Morning, Verify 👋`, `Good Afternoon, Verify 👋`, or `Good Evening, Verify 👋` from local time (`Verify` is the launch Clerk first name). Unsigned `/` redirects to `/sign-in`, which mounts Clerk's default `<SignIn />`. Empty Home and list copy is `Capture your first meeting` with `No meetings yet. Capture or upload a file to start.` Buttons `Capture a meeting` and `Upload a recording` open the same Create a meeting dialog as the header. Status chips are `Queued`, `Processing`, `Ready`, `Failed`. Audio rows include sr-only `Audio recording` in the link name.
 
 The browser talks only to Next `/api/*`. Home and list poll every 2s while any row is queued or processing.
 
@@ -102,12 +112,14 @@ Each run needs:
 
 - `notes.md` with feature id, entry point, `ui_url`, doctor excerpt, and what changed
 - an ARIA snapshot **before** the action and **after** (`browser_snapshot` saved as `*.aria.txt`)
-- a screenshot of the resulting screen with `Verify` or the `Home` / `Meetings` heading visible (`browser_take_screenshot`, `filename` the artifact png)
+- a screenshot of the resulting screen with `Verify` or the `Home` / `Meetings` / `Tasks` heading visible (`browser_take_screenshot`, `filename` the artifact png)
+- for login and each mutation: a screen recording when the agent can record (`RecordScreen` on cloud). Name the file for the whole path (`login.mp4`, `capture-upload.mp4`)
 - for a mutation: a second user-facing read (reload or another route) plus `GET <ui_url>/api/meetings?page=1&limit=5` JSON saved as `meetings.json`
 
 Proof standards:
 
 - Click and type in the UI. Do not seed Mongo or call Hono `:13000` as a stand-in for a user action.
+- Login proof is the SignIn form plus OTP `424242`, then Home. A Bearer JWT or `__session` cookie is not login proof.
 - Upload is the exception in `features/capture.md`: if the OS file chooser blocks the hidden input, POST the file to `<ui_url>/api/meetings/upload?filename=...` (the same Next route `Capture` uses), then prove the list in the browser.
 - Capture the click and the new state, not only the last frame.
 - `sample-audio` / `sample-video` are 2s sine tones. They prove ingest. Speaker labels need spoken audio on meeting detail.
@@ -129,12 +141,12 @@ All invocations from repo root, executable bit on:
 .cursor/skills/verify-fireflies/scripts/control-fireflies launch
 .cursor/skills/verify-fireflies/scripts/control-fireflies doctor
 .cursor/skills/verify-fireflies/scripts/control-fireflies status
-.cursor/skills/verify-fireflies/scripts/control-fireflies session
+.cursor/skills/verify-fireflies/scripts/control-fireflies login
 .cursor/skills/verify-fireflies/scripts/control-fireflies cleanup
 .cursor/skills/verify-fireflies/scripts/control-fireflies sample-video
 .cursor/skills/verify-fireflies/scripts/control-fireflies sample-audio
 ```
 
-`sample-video` prints a 2s mp4 path (default `.run/sample.mp4`). `sample-audio` prints a 2s mp3 path (default `.run/sample.mp3`). Use them only for Capture.
+`login` remints the Clerk testing token and hook, then prints `login_url`, `login_file`, `hook_file`, and `otp=424242`. Read the files. Do not print them. `session` is an alias of `login`. `sample-video` prints a 2s mp4 path (default `.run/sample.mp4`). `sample-audio` prints a 2s mp3 path (default `.run/sample.mp3`). Use them only for Capture.
 
 Optional env: `FIREFLIES_VERIFY_ENV`, `FIREFLIES_UI_PORT`, `FIREFLIES_API_PORT`, `FIREFLIES_VERIFY_VIDEO`, `FIREFLIES_VERIFY_AUDIO`. If `FIREFLIES_VERIFY_ENV` is unset, launch reads `backend/.env` and then `backend/.env.local`.
