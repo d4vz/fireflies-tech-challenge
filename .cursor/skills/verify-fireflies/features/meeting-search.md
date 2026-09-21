@@ -30,7 +30,7 @@ Preconditions:
 - **Search a summary word.** Clear the box. Type a word that is in one summary and not in either title. Only that meeting card is present. URL path stays `/`.
 - **Empty match.** Clear the box. Type `no-such-meeting`. Dropdown copy is `No matching meetings` with `Try another title or summary word.`
 - **Open a card.** Choose the visible meeting card. URL is `/meetings/<id>`.
-- **Proxy check.** After the title search, `GET <ui_url>/api/meetings?page=1&limit=5&q=standup` returns JSON whose `items` include `Weekly standup` and do not include `Payroll`. Save as `artifacts/meeting-search/meetings.json`.
+- **Proxy check.** After the title search, `GET <ui_url>/api/meetings?page=1&limit=4&q=standup` returns JSON whose `items` include `Weekly standup` and do not include `Payroll`. Save as `artifacts/meeting-search/meetings.json`.
 - **Proof.** Save `artifacts/meeting-search/before.aria.txt` on Home, `after.aria.txt` with the dropdown open, and `after.png` with the `Home` heading still visible and the matching card in the dropdown.
 
 ## Gotchas
