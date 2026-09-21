@@ -25,7 +25,7 @@ Preconditions:
 
 - **Open Home.** Go to `ui_url`. Run `browser_navigate` to the doctor `ui_url`. The heading is `Home`. The greeting matches `Good (Morning|Afternoon|Evening), Verify 👋`. The sidebar `Home` link is `aria-current=page`.
 - **Read insights.** Wait until the Home skeleton is gone. Three cards read `Meetings` / `0 in the library`, `In progress` / `0 processing`, `Tasks` / `0 pending · 0 completed` on an empty library. There is never a fourth insight card. `Processing for …` does not appear. After an upload the Meetings count rises. In progress stays a count card, not a `sourceId` title.
-- **Last meetings.** The section heading is `Last meetings`. Beside it is a `view more` link. There are no `All` / `Ready` / `Busy` / `Failed` tabs. `Search meetings` lives in the header, not in this section.
+- **Last meetings.** The section heading is `Last meetings`. Beside it is a `view more` link. There are no `All` / `Ready` / `Busy` / `Failed` tabs. `Search meetings` lives in the header dropdown, not in this section.
 - **Empty copy.** The page contains `Capture your first meeting` and `No meetings yet. Capture or upload a file to start.` Buttons named `Capture a meeting` and `Upload a recording` are present. `Last meetings` and `view more` stay on the page.
 - **Meetings entry.** Choose `view more`. Run `browser_snapshot`, then `browser_click` the link named `view more`. The heading becomes `Meetings` and the URL path is `/meetings`.
 - **Return Home.** Choose sidebar `Home`. Run `browser_click` the link named `Home`. URL path is `/`.

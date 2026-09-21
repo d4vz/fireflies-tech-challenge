@@ -1,22 +1,20 @@
 # Meeting search
 
-Meeting search lives in the app header. The `Search meetings` box is on every signed-in page. Submit writes `q` and opens `/meetings` as meeting cards. Results stay newest first and keep the status tabs when the user is already on the library.
+Meeting search lives in the app header. The `Search meetings` box is on every signed-in page. Typing opens a shadcn dropdown of meeting cards with preview, title, summary, and status. The current page does not change to `/meetings`.
 
 ## Sub-features
 
 - `search-box` shows a textbox named `Search meetings` in the header on Home, Meetings, Tasks, and meeting detail.
-- `search-title` keeps only cards whose `name` matches the query and writes `q` on the `/meetings` URL.
-- `search-empty` shows `No matching meetings` when the query matches nothing. It does not show capture-first copy.
-- `search-clear` with an empty query returns the unfiltered list for the current status tab.
-- `search-tabs` keeps `q` when the user chooses All, Ready, Processing, or Failed.
+- `search-title` keeps only cards whose `name` matches the query.
+- `search-summary` keeps cards whose summary text matches, even when the title does not.
+- `search-empty` shows `No matching meetings` in the dropdown when the query matches nothing.
+- `search-open` opens a meeting from a dropdown card. The URL becomes `/meetings/:id`. It does not become `/meetings?q=`.
 
 ## How to get to it (user POV)
 
 - Use `Search meetings` in the header on Home.
 - Use `Search meetings` in the header after choosing the `Meetings` link.
 - Use `Search meetings` in the header on Tasks or a meeting detail page.
-- Open `/meetings?q=standup` directly.
-- Choose `view more` on Home, then use `Search meetings` in the header.
 
 ## Driving it with the Cursor browser
 
@@ -25,21 +23,19 @@ Preconditions:
 - `control-fireflies doctor` reports `doctor=ok`.
 - Viewport is 1440x900.
 - Start on an empty `fireflies_verify` database.
-- Upload at least two recordings with different names through Capture or the Next upload route. Use names `Weekly standup` and `Payroll`.
+- Upload at least two recordings with different names through Capture or the Next upload route. Use names `Weekly standup` and `Payroll`. Spoken audio is required for `search-summary`.
 
-- **Open Home.** Choose sidebar `Home`. The heading is `Home`. A textbox named `Search meetings` is present in the header.
-- **Search a title from Home.** Click `Search meetings`. Type `standup`. Submit the form (Enter). URL includes `/meetings` and `q=standup`. The `Weekly standup` card is present. The `Payroll` card is absent.
-- **Empty match.** Clear the box. Type `no-such-meeting`. Submit. Copy is `No matching meetings` with `Try another title or summary word.` Capture-first copy is absent.
-- **Clear.** Clear the box and submit. URL has no `q`. Both uploaded names are present again.
-- **Keep q on a tab.** Search `standup` again. Choose `Ready`. URL includes `status=ready` and `q=standup`.
+- **Open Home.** Choose sidebar `Home`. The heading is `Home`. A textbox named `Search meetings` is present in the header. URL path stays `/`.
+- **Search a title from Home.** Click `Search meetings`. Type `standup`. A dropdown opens on Home. The `Weekly standup` card is present. The `Payroll` card is absent. URL path is still `/`. It does not include `q=standup`.
+- **Search a summary word.** Clear the box. Type a word that is in one summary and not in either title. Only that meeting card is present. URL path stays `/`.
+- **Empty match.** Clear the box. Type `no-such-meeting`. Dropdown copy is `No matching meetings` with `Try another title or summary word.`
+- **Open a card.** Choose the visible meeting card. URL is `/meetings/<id>`.
 - **Proxy check.** After the title search, `GET <ui_url>/api/meetings?page=1&limit=5&q=standup` returns JSON whose `items` include `Weekly standup` and do not include `Payroll`. Save as `artifacts/meeting-search/meetings.json`.
-- **Proof.** Save `artifacts/meeting-search/before.aria.txt` on Home with the header box, `library.aria.txt` on the full library, `after.aria.txt` after the title search, and `after.png` with the `Meetings` heading and `Weekly standup` cards visible.
+- **Proof.** Save `artifacts/meeting-search/before.aria.txt` on Home, `after.aria.txt` with the dropdown open, and `after.png` with the `Home` heading still visible and the matching card in the dropdown.
 
 ## Gotchas
 
-- The header owns `Search meetings`. The library body is cards, tabs, and empty copy only.
+- The header owns `Search meetings`. Do not treat a navigation to `/meetings?q=` as this feature.
 - Home Last meetings has no search box of its own. Use the header.
-- Capture-first copy is only for an empty All list with no `q`. A miss on a populated library uses `No matching meetings`.
-- `sample-audio` / `sample-video` prove ingest. Set the upload `name` to the title you will search. Do not rely on a generated summary word.
-- Status tabs reset to page 1 and keep `q`. A search from Home, Tasks, or detail opens All.
-- Submit the search form. Typing without Enter does not change the URL.
+- `sample-audio` / `sample-video` prove ingest. Summary search needs spoken audio and a Ready summary.
+- Submit is not required. Typing a non-empty query opens the dropdown.
